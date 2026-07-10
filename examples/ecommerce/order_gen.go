@@ -765,3 +765,38 @@ func (c *AppClient) BatchPutOrders(ctx context.Context, items []Order) error {
 	}
 	return runtime.BatchWrite(ctx, c.ddb, c.table, avs)
 }
+
+// TransactPutOrder returns a TransactWriteItem putting o (with
+// synthesized key attributes), for use with TransactWrite. Transactional
+// puts are a thin passthrough: no version condition is applied.
+func (c *AppClient) TransactPutOrder(o *Order) (types.TransactWriteItem, error) {
+	av, err := marshalOrder(o)
+	if err != nil {
+		return types.TransactWriteItem{}, err
+	}
+	return types.TransactWriteItem{
+		Put: &types.Put{TableName: aws.String(c.table), Item: av},
+	}, nil
+}
+
+// TransactDeleteOrder returns a TransactWriteItem deleting the
+// Order identified by the given key fields.
+func (c *AppClient) TransactDeleteOrder(tenantID string, createdAt time.Time, orderID string) (types.TransactWriteItem, error) {
+	pk, err := orderPK(tenantID)
+	if err != nil {
+		return types.TransactWriteItem{}, err
+	}
+	sk, err := orderSK(createdAt, orderID)
+	if err != nil {
+		return types.TransactWriteItem{}, err
+	}
+	return types.TransactWriteItem{
+		Delete: &types.Delete{
+			TableName: aws.String(c.table),
+			Key: map[string]types.AttributeValue{
+				"pk": &types.AttributeValueMemberS{Value: pk},
+				"sk": &types.AttributeValueMemberS{Value: sk},
+			},
+		},
+	}, nil
+}

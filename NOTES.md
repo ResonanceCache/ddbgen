@@ -95,6 +95,11 @@ rationale per judgment call, per the handoff spec.
   unprocessed keys/items under test-scale load. The retry loop is unit-level
   logic in runtime/batch.go with the cap and jitter constants documented.
 
+- **M8 stretch: TransactWrite + init shipped; CDK Go emitter skipped.** The
+  transact helpers are a deliberately thin passthrough (no version conditions —
+  documented in the generated godoc); the CDK emitter was cut for time and
+  because CFN/TF cover the deployment story.
+
 ## Known gaps
 
 - Pattern queries against `projection=keys_only` GSIs unmarshal only key and

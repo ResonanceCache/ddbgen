@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
@@ -26,6 +27,26 @@ func NewAppClient(ddb *dynamodb.Client, table string) *AppClient {
 // AppItem is the sealed union of entity types stored in table
 // "app": Order, Payment, Tenant.
 type AppItem interface{ isAppItem() }
+
+// TransactWrite executes the given write items in one atomic transaction
+// (thin passthrough over DynamoDB TransactWriteItems; at most 100 items).
+// Build items with the TransactPut/TransactDelete helpers. A failed
+// condition inside the transaction surfaces as runtime.ErrConditionFailed.
+func (c *AppClient) TransactWrite(ctx context.Context, items ...types.TransactWriteItem) error {
+	if len(items) == 0 {
+		return nil
+	}
+	_, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: items,
+	})
+	if err != nil {
+		if runtime.IsTransactionConditionFailed(err) {
+			return fmt.Errorf("TransactWrite: %w", runtime.ErrConditionFailed)
+		}
+		return fmt.Errorf("TransactWrite: %w", err)
+	}
+	return nil
+}
 
 // TenantPartitionQuery queries every item in one "TENANT#{TenantID}"
 // partition. Terminate with Collect.

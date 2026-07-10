@@ -3,7 +3,13 @@
 package minimal
 
 import (
+	"context"
+	"fmt"
+
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+
+	"github.com/ResonanceCache/ddbgen/runtime"
 )
 
 // CfgClient is a typed client for the single-table design on table
@@ -21,3 +27,23 @@ func NewCfgClient(ddb *dynamodb.Client, table string) *CfgClient {
 // CfgItem is the sealed union of entity types stored in table
 // "cfg": Config.
 type CfgItem interface{ isCfgItem() }
+
+// TransactWrite executes the given write items in one atomic transaction
+// (thin passthrough over DynamoDB TransactWriteItems; at most 100 items).
+// Build items with the TransactPut/TransactDelete helpers. A failed
+// condition inside the transaction surfaces as runtime.ErrConditionFailed.
+func (c *CfgClient) TransactWrite(ctx context.Context, items ...types.TransactWriteItem) error {
+	if len(items) == 0 {
+		return nil
+	}
+	_, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: items,
+	})
+	if err != nil {
+		if runtime.IsTransactionConditionFailed(err) {
+			return fmt.Errorf("TransactWrite: %w", runtime.ErrConditionFailed)
+		}
+		return fmt.Errorf("TransactWrite: %w", err)
+	}
+	return nil
+}

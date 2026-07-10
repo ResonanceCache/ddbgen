@@ -253,3 +253,33 @@ func (c *CfgClient) BatchPutConfigs(ctx context.Context, items []Config) error {
 	}
 	return runtime.BatchWrite(ctx, c.ddb, c.table, avs)
 }
+
+// TransactPutConfig returns a TransactWriteItem putting it (with
+// synthesized key attributes), for use with TransactWrite. Transactional
+// puts are a thin passthrough: no version condition is applied.
+func (c *CfgClient) TransactPutConfig(it *Config) (types.TransactWriteItem, error) {
+	av, err := marshalConfig(it)
+	if err != nil {
+		return types.TransactWriteItem{}, err
+	}
+	return types.TransactWriteItem{
+		Put: &types.Put{TableName: aws.String(c.table), Item: av},
+	}, nil
+}
+
+// TransactDeleteConfig returns a TransactWriteItem deleting the
+// Config identified by the given key fields.
+func (c *CfgClient) TransactDeleteConfig(name string) (types.TransactWriteItem, error) {
+	pk, err := configPK(name)
+	if err != nil {
+		return types.TransactWriteItem{}, err
+	}
+	return types.TransactWriteItem{
+		Delete: &types.Delete{
+			TableName: aws.String(c.table),
+			Key: map[string]types.AttributeValue{
+				"pk": &types.AttributeValueMemberS{Value: pk},
+			},
+		},
+	}, nil
+}

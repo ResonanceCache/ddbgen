@@ -312,3 +312,38 @@ func (c *AppClient) BatchPutTenants(ctx context.Context, items []Tenant) error {
 	}
 	return runtime.BatchWrite(ctx, c.ddb, c.table, avs)
 }
+
+// TransactPutTenant returns a TransactWriteItem putting t (with
+// synthesized key attributes), for use with TransactWrite. Transactional
+// puts are a thin passthrough: no version condition is applied.
+func (c *AppClient) TransactPutTenant(t *Tenant) (types.TransactWriteItem, error) {
+	av, err := marshalTenant(t)
+	if err != nil {
+		return types.TransactWriteItem{}, err
+	}
+	return types.TransactWriteItem{
+		Put: &types.Put{TableName: aws.String(c.table), Item: av},
+	}, nil
+}
+
+// TransactDeleteTenant returns a TransactWriteItem deleting the
+// Tenant identified by the given key fields.
+func (c *AppClient) TransactDeleteTenant(tenantID string) (types.TransactWriteItem, error) {
+	pk, err := tenantPK(tenantID)
+	if err != nil {
+		return types.TransactWriteItem{}, err
+	}
+	sk, err := tenantSK(tenantID)
+	if err != nil {
+		return types.TransactWriteItem{}, err
+	}
+	return types.TransactWriteItem{
+		Delete: &types.Delete{
+			TableName: aws.String(c.table),
+			Key: map[string]types.AttributeValue{
+				"pk": &types.AttributeValueMemberS{Value: pk},
+				"sk": &types.AttributeValueMemberS{Value: sk},
+			},
+		},
+	}, nil
+}

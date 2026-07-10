@@ -22,6 +22,7 @@ access-pattern matrix document.`,
 		newDiffCmd(),
 		newInfraCmd(),
 		newDocsCmd(),
+		newInitCmd(),
 		newVersionCmd(),
 	)
 	return root

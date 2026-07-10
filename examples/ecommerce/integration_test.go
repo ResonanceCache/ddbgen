@@ -285,6 +285,41 @@ func TestCollectionsAndBatch(t *testing.T) {
 	_ = o
 }
 
+func TestTransactWrite(t *testing.T) {
+	app := newTestClient(t)
+	ctx := context.Background()
+
+	o := &Order{TenantID: "acme", OrderID: "o1", Status: "open", CreatedAt: itT0, UpdatedAt: itT0, Ver: 1}
+	putOrder, err := app.TransactPutOrder(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	putPay, err := app.TransactPutPayment(&Payment{TenantID: "acme", OrderID: "o1", PaymentID: "p1", AmountCts: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.TransactWrite(ctx, putOrder, putPay); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.GetOrder(ctx, "acme", itT0, "o1"); err != nil {
+		t.Fatalf("order missing after transaction: %v", err)
+	}
+	if _, err := app.GetPayment(ctx, "acme", "o1", "p1"); err != nil {
+		t.Fatalf("payment missing after transaction: %v", err)
+	}
+
+	del, err := app.TransactDeleteOrder("acme", itT0, "o1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.TransactWrite(ctx, del); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.GetOrder(ctx, "acme", itT0, "o1"); !errors.Is(err, runtime.ErrNotFound) {
+		t.Fatalf("order must be gone after transactional delete: %v", err)
+	}
+}
+
 func TestDelimiterRejection(t *testing.T) {
 	app := newTestClient(t)
 	ctx := context.Background()

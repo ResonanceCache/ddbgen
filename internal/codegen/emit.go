@@ -72,6 +72,7 @@ package {{.Package}}
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
@@ -94,6 +95,26 @@ func New{{.Client}}(ddb *dynamodb.Client, table string) *{{.Client}} {
 // {{.Iface}} is the sealed union of entity types stored in table
 // {{printf "%q" .Table}}: {{range $i, $e := .Entities}}{{if $i}}, {{end}}{{$e}}{{end}}.
 type {{.Iface}} interface{ is{{.Iface}}() }
+
+// TransactWrite executes the given write items in one atomic transaction
+// (thin passthrough over DynamoDB TransactWriteItems; at most 100 items).
+// Build items with the TransactPut/TransactDelete helpers. A failed
+// condition inside the transaction surfaces as runtime.ErrConditionFailed.
+func (c *{{.Client}}) TransactWrite(ctx context.Context, items ...types.TransactWriteItem) error {
+	if len(items) == 0 {
+		return nil
+	}
+	_, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: items,
+	})
+	if err != nil {
+		if runtime.IsTransactionConditionFailed(err) {
+			return fmt.Errorf("TransactWrite: %w", runtime.ErrConditionFailed)
+		}
+		return fmt.Errorf("TransactWrite: %w", err)
+	}
+	return nil
+}
 
 {{range .Partitions}}
 // {{.QueryType}} queries every item in one {{printf "%q" .PKRaw}}
@@ -782,5 +803,44 @@ func (c *{{.Client}}) BatchPut{{.Batch.Plural}}(ctx context.Context, items []{{.
 		avs = append(avs, av)
 	}
 	return runtime.BatchWrite(ctx, c.ddb, c.table, avs)
+}
+
+// TransactPut{{.Entity}} returns a TransactWriteItem putting {{.ItemVar}} (with
+// synthesized key attributes), for use with TransactWrite. Transactional
+// puts are a thin passthrough: no version condition is applied.
+func (c *{{.Client}}) TransactPut{{.Entity}}({{.ItemVar}} *{{.Entity}}) (types.TransactWriteItem, error) {
+	av, err := marshal{{.Entity}}({{.ItemVar}})
+	if err != nil {
+		return types.TransactWriteItem{}, err
+	}
+	return types.TransactWriteItem{
+		Put: &types.Put{TableName: aws.String(c.table), Item: av},
+	}, nil
+}
+
+// TransactDelete{{.Entity}} returns a TransactWriteItem deleting the
+// {{.Entity}} identified by the given key fields.
+func (c *{{.Client}}) TransactDelete{{.Entity}}({{range $i, $p := .KeyParams}}{{if $i}}, {{end}}{{$p.Name}} {{$p.Type}}{{end}}) (types.TransactWriteItem, error) {
+	pk, err := {{.PKFunc.Name}}({{.PKFunc.FromParam}})
+	if err != nil {
+		return types.TransactWriteItem{}, err
+	}
+{{- if .HasSK}}
+	sk, err := {{.SKFunc.Name}}({{.SKFunc.FromParam}})
+	if err != nil {
+		return types.TransactWriteItem{}, err
+	}
+{{- end}}
+	return types.TransactWriteItem{
+		Delete: &types.Delete{
+			TableName: aws.String(c.table),
+			Key: map[string]types.AttributeValue{
+				"pk": &types.AttributeValueMemberS{Value: pk},
+{{- if .HasSK}}
+				"sk": &types.AttributeValueMemberS{Value: sk},
+{{- end}}
+			},
+		},
+	}, nil
 }
 `))

@@ -199,11 +199,14 @@ breaking; deciding how to migrate stored keys is a human decision.
 
 ## Roadmap
 
-- `TransactWrite` passthrough helper
-- `ddbgen init` scaffolder
 - CDK (Go) emitter
 - configurable delimiter and physical attribute names
 - shard-suffix key templates (write sharding)
+- LSI support if a compelling case shows up (see FAQ)
+
+Shipped beyond v1 scope: a thin `TransactWrite` passthrough
+(`TransactPut<Entity>` / `TransactDelete<Entity>` builders) and a
+`ddbgen init` scaffolder.
 
 ## License
 

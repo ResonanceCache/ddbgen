@@ -305,3 +305,38 @@ func (c *AppClient) BatchPutPayments(ctx context.Context, items []Payment) error
 	}
 	return runtime.BatchWrite(ctx, c.ddb, c.table, avs)
 }
+
+// TransactPutPayment returns a TransactWriteItem putting p (with
+// synthesized key attributes), for use with TransactWrite. Transactional
+// puts are a thin passthrough: no version condition is applied.
+func (c *AppClient) TransactPutPayment(p *Payment) (types.TransactWriteItem, error) {
+	av, err := marshalPayment(p)
+	if err != nil {
+		return types.TransactWriteItem{}, err
+	}
+	return types.TransactWriteItem{
+		Put: &types.Put{TableName: aws.String(c.table), Item: av},
+	}, nil
+}
+
+// TransactDeletePayment returns a TransactWriteItem deleting the
+// Payment identified by the given key fields.
+func (c *AppClient) TransactDeletePayment(tenantID string, orderID string, paymentID string) (types.TransactWriteItem, error) {
+	pk, err := paymentPK(tenantID)
+	if err != nil {
+		return types.TransactWriteItem{}, err
+	}
+	sk, err := paymentSK(orderID, paymentID)
+	if err != nil {
+		return types.TransactWriteItem{}, err
+	}
+	return types.TransactWriteItem{
+		Delete: &types.Delete{
+			TableName: aws.String(c.table),
+			Key: map[string]types.AttributeValue{
+				"pk": &types.AttributeValueMemberS{Value: pk},
+				"sk": &types.AttributeValueMemberS{Value: sk},
+			},
+		},
+	}, nil
+}
