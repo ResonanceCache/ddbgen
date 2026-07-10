@@ -1,0 +1,2 @@
+input.go:4: DDB004: entity Order pk template "ORDER#{Num:pad8}": placeholder {Num}: encoder pad8 requires int64 or an unsigned integer, but field is string
+input.go:4: DDB004: entity Order sk template "AT#{When:rfc3339}": placeholder {When}: encoder rfc3339 requires time.Time, but field is int64

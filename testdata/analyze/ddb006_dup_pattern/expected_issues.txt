@@ -1,0 +1,1 @@
+input.go:5: DDB006: pattern name ByID on entity Order duplicates a pattern on entity Invoice; generated method names would collide

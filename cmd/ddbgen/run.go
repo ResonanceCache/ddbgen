@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/ResonanceCache/ddbgen/internal/analyze"
 	"github.com/ResonanceCache/ddbgen/internal/parser"
 	"github.com/ResonanceCache/ddbgen/internal/schema"
 )
@@ -51,6 +52,9 @@ func loadSchemas(args []string) (map[string]*schema.Schema, error) {
 	s, err := parser.Load(args...)
 	if err != nil {
 		return nil, err
+	}
+	if issues := analyze.Schema(s); len(issues) > 0 {
+		return nil, issues
 	}
 	return schemasByDir(s), nil
 }

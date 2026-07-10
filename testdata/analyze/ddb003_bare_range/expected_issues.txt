@@ -1,0 +1,1 @@
+input.go:5: DDB003: pattern DocRange: declares sk.between over placeholder {Name}, whose encoding is variable-width, so lexicographic key order diverges from value order (a longer value can sort before a shorter one that is semantically smaller); use a fixed-width encoder (rfc3339, epoch, epochms, pad<N>, ulid, hex of [N]byte)

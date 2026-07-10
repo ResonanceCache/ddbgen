@@ -1,0 +1,1 @@
+input.go:4: DDB001: entities Account and User can write items with identical keys on the main index: pk "USER#{Email}" vs "USER#{ID}" overlap and the sort keys do not disambiguate ("PROFILE#{Email}" vs "PROFILE#{ID}"); add a distinguishing literal segment, e.g. an entity-name prefix, to one of the templates

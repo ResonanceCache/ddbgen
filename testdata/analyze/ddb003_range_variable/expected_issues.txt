@@ -1,0 +1,1 @@
+input.go:5: DDB003: pattern DocsAfter: sk.gt ranges over placeholder {Name}, whose encoding is variable-width; lexicographic comparison would not follow value order — use a fixed-width encoder

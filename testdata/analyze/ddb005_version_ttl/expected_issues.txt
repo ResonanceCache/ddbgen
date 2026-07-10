@@ -1,0 +1,2 @@
+input.go:3: DDB005: entity Order: version field Rev must be an integer type (int, int32, int64), got string
+input.go:3: DDB005: entity Order: ttl field Expires must be int64 (unix seconds), got int32

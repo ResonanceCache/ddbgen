@@ -65,6 +65,15 @@ rationale per judgment call, per the handoff spec.
   resync the index key; that is the drift-prevention claim.)
 - **Add methods are generated for integer fields only** (not floats), and not
   for GSI-templated or key fields.
+- **DDB003 narrowed from the handoff spec's wording (deviation).** The spec says
+  any non-final variable-width sk placeholder must error, but the spec's own
+  worked example (Payment sk `PAY#{OrderID}#{PaymentID}`) violates that rule,
+  and the worked example is load-bearing for the example app and tests. The
+  narrowed rule errors only where lexicographic order is actually relied on:
+  placeholders that range conditions cut through. Equality ops and
+  boundary-aligned begins_with cuts stay exact for mid-key variable-width
+  segments because the delimiter terminates every segment; range methods are
+  simply not generated for variable-width placeholders.
 - **x/tools pinned to v0.29.0** (and x/sync v0.10.0) to keep the module's minimum
   Go language version at 1.23 per the handoff spec.
 

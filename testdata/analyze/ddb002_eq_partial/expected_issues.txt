@@ -1,0 +1,1 @@
+input.go:5: DDB002: pattern Orders: sk.eq value "ORDER#" must specify the complete sort key "ORDER#{OrderID}"; keys shorter than the template are never written, so a prefix equality can never match (use sk.begins for prefixes)

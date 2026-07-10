@@ -1,0 +1,1 @@
+input.go:3: DDB006: entity type "order" of Order duplicates entity LegacyOrder (at input.go:9); collection dispatch on the entity-type attribute would be ambiguous

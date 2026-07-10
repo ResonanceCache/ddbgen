@@ -1,0 +1,2 @@
+input.go:4: DDB007: entity Order pk template "ORDER#{Missing}": placeholder {Missing} does not resolve to an exported, marshaled field (unexported fields and dynamodbav:"-" fields cannot feed keys)
+input.go:4: DDB007: entity Order sk template "NOTE#{Note}": placeholder {Note} does not resolve to an exported, marshaled field (unexported fields and dynamodbav:"-" fields cannot feed keys)

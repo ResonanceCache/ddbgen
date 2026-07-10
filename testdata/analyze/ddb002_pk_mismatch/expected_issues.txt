@@ -1,0 +1,1 @@
+input.go:5: DDB002: pattern Orders: pk template "TEN#{TenantID}" is not structurally identical to the pk template "TENANT#{TenantID}" of the main index on entity Order (same literals, fields, and encoders required, or the generated method would query keys that are never written)

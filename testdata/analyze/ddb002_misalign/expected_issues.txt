@@ -1,0 +1,1 @@
+input.go:5: DDB002: pattern Orders: condition "ORD" ends mid-literal: "ORD" is a partial match of template literal "ORDER", which is not a placeholder boundary
