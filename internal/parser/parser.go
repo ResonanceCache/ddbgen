@@ -133,14 +133,19 @@ func collectMarkers(fset *token.FileSet, doc *ast.CommentGroup) ([]*marker, erro
 	return out, nil
 }
 
-var skCondKeys = map[string]schema.SKCondKind{
-	"sk.eq":      schema.SKEq,
-	"sk.begins":  schema.SKBegins,
-	"sk.between": schema.SKBetween,
-	"sk.gt":      schema.SKGt,
-	"sk.gte":     schema.SKGte,
-	"sk.lt":      schema.SKLt,
-	"sk.lte":     schema.SKLte,
+// skCondKeys maps marker argument names to condition kinds, in a fixed
+// order so conflict diagnostics are deterministic.
+var skCondKeys = []struct {
+	key  string
+	kind schema.SKCondKind
+}{
+	{"sk.eq", schema.SKEq},
+	{"sk.begins", schema.SKBegins},
+	{"sk.between", schema.SKBetween},
+	{"sk.gt", schema.SKGt},
+	{"sk.gte", schema.SKGte},
+	{"sk.lt", schema.SKLt},
+	{"sk.lte", schema.SKLte},
 }
 
 func buildEntity(name string, st *ast.StructType, markers []*marker, pkgName, dir string) (*schema.Entity, error) {
@@ -393,7 +398,8 @@ func parsePatternMarker(m *marker) (*schema.Pattern, arg, error) {
 		PK:    pk,
 		Pos:   schema.Pos{File: m.file, Line: m.line},
 	}
-	for key, kind := range skCondKeys {
+	for _, ck := range skCondKeys {
+		key, kind := ck.key, ck.kind
 		a, ok := set[key]
 		if !ok {
 			continue
