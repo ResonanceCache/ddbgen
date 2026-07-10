@@ -1,5 +1,9 @@
 # ddbgen
 
+[![ci](https://github.com/ResonanceCache/ddbgen/actions/workflows/ci.yml/badge.svg)](https://github.com/ResonanceCache/ddbgen/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/ResonanceCache/ddbgen.svg)](https://pkg.go.dev/github.com/ResonanceCache/ddbgen/runtime)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 **ElectroDB's model, sqlc's ergonomics, Go's type system.**
 
 `ddbgen` reads Go structs annotated with `//ddb:` marker comments describing a
