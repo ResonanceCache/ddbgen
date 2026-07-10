@@ -66,8 +66,16 @@ reserved-attribute shadowing — each with a stable error code
 go install github.com/ResonanceCache/ddbgen/cmd/ddbgen@latest
 ```
 
-Or pin it per-repo and invoke through `go generate` (the scaffold from
-`ddbgen init` includes this):
+On Go 1.24+, pin it as a module tool instead (recorded in go.mod, versioned
+with your repo):
+
+```sh
+go get -tool github.com/ResonanceCache/ddbgen/cmd/ddbgen@latest
+go tool ddbgen generate ./...
+```
+
+Or invoke it through `go generate` (the scaffold from `ddbgen init`
+includes this):
 
 ```go
 //go:generate go run github.com/ResonanceCache/ddbgen/cmd/ddbgen generate .
@@ -287,4 +295,4 @@ expressions, consistent reads, and conditional deletes.
 
 ## License
 
-Apache-2.0
+Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
