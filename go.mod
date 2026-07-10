@@ -7,6 +7,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.45.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/tools v0.29.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

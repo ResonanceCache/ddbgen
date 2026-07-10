@@ -1,0 +1,212 @@
+// Package emit renders infrastructure definitions (CloudFormation,
+// Terraform) and the access-pattern matrix document from the compiled
+// schema IR — the same parse that drives code generation, so none of the
+// three can drift from the others.
+package emit
+
+import (
+	"bytes"
+	"fmt"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/ResonanceCache/ddbgen/internal/schema"
+)
+
+// TTLAttr returns the table's TTL attribute name, derived from the ttl
+// field of the entity declaring it. Every declaring entity must agree.
+func TTLAttr(t *schema.Table) (string, error) {
+	attr := ""
+	owner := ""
+	for _, e := range t.Entities {
+		if e.TTLField == "" {
+			continue
+		}
+		f, ok := e.Field(e.TTLField)
+		if !ok {
+			return "", fmt.Errorf("entity %s: ttl field %s not found", e.Name, e.TTLField)
+		}
+		if attr != "" && attr != f.Attr {
+			return "", fmt.Errorf("table %q: entities %s and %s declare different ttl attributes (%q vs %q); DynamoDB allows one TTL attribute per table",
+				t.Name, owner, e.Name, attr, f.Attr)
+		}
+		attr, owner = f.Attr, e.Name
+	}
+	return attr, nil
+}
+
+// tableHasSK reports whether the table's main index has a sort key
+// (Compile guarantees all entities agree).
+func tableHasSK(t *schema.Table) bool {
+	return len(t.Entities) > 0 && t.Entities[0].Key.SK != nil
+}
+
+type cfnKeyElement struct {
+	AttributeName string `yaml:"AttributeName"`
+	KeyType       string `yaml:"KeyType"`
+}
+
+type cfnAttrDef struct {
+	AttributeName string `yaml:"AttributeName"`
+	AttributeType string `yaml:"AttributeType"`
+}
+
+type cfnProjection struct {
+	ProjectionType string `yaml:"ProjectionType"`
+}
+
+type cfnGSI struct {
+	IndexName  string          `yaml:"IndexName"`
+	KeySchema  []cfnKeyElement `yaml:"KeySchema"`
+	Projection cfnProjection   `yaml:"Projection"`
+}
+
+type cfnTTL struct {
+	AttributeName string `yaml:"AttributeName"`
+	Enabled       bool   `yaml:"Enabled"`
+}
+
+type cfnPITR struct {
+	PointInTimeRecoveryEnabled bool `yaml:"PointInTimeRecoveryEnabled"`
+}
+
+type cfnProperties struct {
+	TableName                 string          `yaml:"TableName"`
+	BillingMode               string          `yaml:"BillingMode"`
+	AttributeDefinitions      []cfnAttrDef    `yaml:"AttributeDefinitions"`
+	KeySchema                 []cfnKeyElement `yaml:"KeySchema"`
+	GlobalSecondaryIndexes    []cfnGSI        `yaml:"GlobalSecondaryIndexes,omitempty"`
+	TimeToLiveSpecification   *cfnTTL         `yaml:"TimeToLiveSpecification,omitempty"`
+	PointInTimeRecoverySpec   cfnPITR         `yaml:"PointInTimeRecoverySpecification"`
+	DeletionProtectionEnabled bool            `yaml:"DeletionProtectionEnabled"`
+}
+
+type cfnResource struct {
+	Type       string        `yaml:"Type"`
+	Properties cfnProperties `yaml:"Properties"`
+}
+
+type cfnTemplate struct {
+	AWSTemplateFormatVersion string                 `yaml:"AWSTemplateFormatVersion"`
+	Description              string                 `yaml:"Description"`
+	Resources                map[string]cfnResource `yaml:"Resources"`
+}
+
+// keyAttrs returns the table's physical key attributes in stable order:
+// main pk/sk, then each GSI's pk/sk. Key attributes are always strings —
+// templates concatenate encoded segments.
+func keyAttrs(t *schema.Table) []string {
+	out := []string{"pk"}
+	if tableHasSK(t) {
+		out = append(out, "sk")
+	}
+	for _, ix := range t.Indexes {
+		out = append(out, ix.PKAttr)
+		if ix.SKAttr != "" {
+			out = append(out, ix.SKAttr)
+		}
+	}
+	return out
+}
+
+func projectionType(p string) string {
+	if p == "keys_only" {
+		return "KEYS_ONLY"
+	}
+	return "ALL"
+}
+
+// CloudFormation renders the table as a CloudFormation template.
+func CloudFormation(t *schema.Table) ([]byte, error) {
+	ttlAttr, err := TTLAttr(t)
+	if err != nil {
+		return nil, err
+	}
+	props := cfnProperties{
+		TableName:                 t.Name,
+		BillingMode:               "PAY_PER_REQUEST",
+		PointInTimeRecoverySpec:   cfnPITR{PointInTimeRecoveryEnabled: true},
+		DeletionProtectionEnabled: true,
+	}
+	for _, attr := range keyAttrs(t) {
+		props.AttributeDefinitions = append(props.AttributeDefinitions, cfnAttrDef{AttributeName: attr, AttributeType: "S"})
+	}
+	props.KeySchema = []cfnKeyElement{{AttributeName: "pk", KeyType: "HASH"}}
+	if tableHasSK(t) {
+		props.KeySchema = append(props.KeySchema, cfnKeyElement{AttributeName: "sk", KeyType: "RANGE"})
+	}
+	for _, ix := range t.Indexes {
+		gsi := cfnGSI{
+			IndexName:  ix.Name,
+			KeySchema:  []cfnKeyElement{{AttributeName: ix.PKAttr, KeyType: "HASH"}},
+			Projection: cfnProjection{ProjectionType: projectionType(ix.Projection)},
+		}
+		if ix.SKAttr != "" {
+			gsi.KeySchema = append(gsi.KeySchema, cfnKeyElement{AttributeName: ix.SKAttr, KeyType: "RANGE"})
+		}
+		props.GlobalSecondaryIndexes = append(props.GlobalSecondaryIndexes, gsi)
+	}
+	if ttlAttr != "" {
+		props.TimeToLiveSpecification = &cfnTTL{AttributeName: ttlAttr, Enabled: true}
+	}
+	tmpl := cfnTemplate{
+		AWSTemplateFormatVersion: "2010-09-09",
+		Description:              fmt.Sprintf("DynamoDB table %q. Generated by ddbgen. DO NOT EDIT.", t.Name),
+		Resources: map[string]cfnResource{
+			resourceName(t.Name): {Type: "AWS::DynamoDB::Table", Properties: props},
+		},
+	}
+	var buf bytes.Buffer
+	buf.WriteString("# Generated by ddbgen. DO NOT EDIT.\n")
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(tmpl); err != nil {
+		return nil, fmt.Errorf("encoding CloudFormation for table %q: %w", t.Name, err)
+	}
+	if err := enc.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func resourceName(table string) string {
+	return strings.ToUpper(table[:1]) + table[1:] + "Table"
+}
+
+// Terraform renders the table as an aws_dynamodb_table resource.
+func Terraform(t *schema.Table) ([]byte, error) {
+	ttlAttr, err := TTLAttr(t)
+	if err != nil {
+		return nil, err
+	}
+	var b strings.Builder
+	b.WriteString("# Generated by ddbgen. DO NOT EDIT.\n\n")
+	fmt.Fprintf(&b, "resource \"aws_dynamodb_table\" %q {\n", t.Name)
+	fmt.Fprintf(&b, "  name                        = %q\n", t.Name)
+	b.WriteString("  billing_mode                = \"PAY_PER_REQUEST\"\n")
+	b.WriteString("  hash_key                    = \"pk\"\n")
+	if tableHasSK(t) {
+		b.WriteString("  range_key                   = \"sk\"\n")
+	}
+	b.WriteString("  deletion_protection_enabled = true\n")
+	for _, attr := range keyAttrs(t) {
+		fmt.Fprintf(&b, "\n  attribute {\n    name = %q\n    type = \"S\"\n  }\n", attr)
+	}
+	for _, ix := range t.Indexes {
+		b.WriteString("\n  global_secondary_index {\n")
+		fmt.Fprintf(&b, "    name            = %q\n", ix.Name)
+		fmt.Fprintf(&b, "    hash_key        = %q\n", ix.PKAttr)
+		if ix.SKAttr != "" {
+			fmt.Fprintf(&b, "    range_key       = %q\n", ix.SKAttr)
+		}
+		fmt.Fprintf(&b, "    projection_type = %q\n", projectionType(ix.Projection))
+		b.WriteString("  }\n")
+	}
+	if ttlAttr != "" {
+		fmt.Fprintf(&b, "\n  ttl {\n    attribute_name = %q\n    enabled        = true\n  }\n", ttlAttr)
+	}
+	b.WriteString("\n  point_in_time_recovery {\n    enabled = true\n  }\n")
+	b.WriteString("}\n")
+	return []byte(b.String()), nil
+}

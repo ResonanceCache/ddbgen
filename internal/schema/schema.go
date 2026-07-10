@@ -190,6 +190,10 @@ func Compile(entities []*Entity) (*Schema, error) {
 				return nil, fmt.Errorf("%s: table %q spans Go packages %q and %q; all entities of one table must live in one package",
 					e.Pos, name, t.GoPackage, e.GoPackage)
 			}
+			if (e.Key.SK != nil) != (ents[0].Key.SK != nil) {
+				return nil, fmt.Errorf("%s: entity %s disagrees with entity %s (at %s) on whether table %q has a sort key; one physical key schema must fit all entities",
+					e.KeyPos, e.Name, ents[0].Name, ents[0].KeyPos, name)
+			}
 			sort.Slice(e.Patterns, func(i, j int) bool { return e.Patterns[i].Name < e.Patterns[j].Name })
 			sort.Slice(e.Indexes, func(i, j int) bool { return e.Indexes[i].Name < e.Indexes[j].Name })
 		}

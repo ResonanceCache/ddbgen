@@ -2,10 +2,12 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 
 	"github.com/ResonanceCache/ddbgen/internal/analyze"
+	"github.com/ResonanceCache/ddbgen/internal/emit"
 	"github.com/ResonanceCache/ddbgen/internal/parser"
 	"github.com/ResonanceCache/ddbgen/internal/schema"
 )
@@ -108,6 +110,58 @@ func runDiff(args []string, stdout printer) error {
 		}
 	}
 	stdout.Printf("no breaking schema changes\n")
+	return nil
+}
+
+func runInfra(args []string, format, outDir string, stdout printer) error {
+	byDir, err := loadSchemas(args)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return err
+	}
+	for _, dir := range sortedDirs(byDir) {
+		for _, t := range byDir[dir].Tables {
+			var data []byte
+			var name string
+			switch format {
+			case "cfn":
+				name = "table_" + t.Name + ".cfn.yaml"
+				data, err = emit.CloudFormation(t)
+			case "tf":
+				name = "table_" + t.Name + ".tf"
+				data, err = emit.Terraform(t)
+			}
+			if err != nil {
+				return err
+			}
+			path := filepath.Join(outDir, name)
+			if err := os.WriteFile(path, data, 0o644); err != nil {
+				return err
+			}
+			stdout.Printf("wrote %s\n", path)
+		}
+	}
+	return nil
+}
+
+func runDocs(args []string, stdout printer) error {
+	byDir, err := loadSchemas(args)
+	if err != nil {
+		return err
+	}
+	for _, dir := range sortedDirs(byDir) {
+		data, err := emit.AccessPatterns(byDir[dir])
+		if err != nil {
+			return err
+		}
+		path := filepath.Join(dir, "ACCESS_PATTERNS.md")
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			return err
+		}
+		stdout.Printf("wrote %s\n", path)
+	}
 	return nil
 }
 

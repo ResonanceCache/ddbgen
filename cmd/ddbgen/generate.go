@@ -1,7 +1,7 @@
 package main
 
 import (
-	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -45,16 +45,25 @@ reported; breaking changes exit nonzero. Intended for CI.`,
 }
 
 func newInfraCmd() *cobra.Command {
-	var format string
+	var format, outDir string
 	cmd := &cobra.Command{
 		Use:   "infra [packages]",
 		Short: "Emit infrastructure definitions (CloudFormation or Terraform)",
-		Args:  cobra.ArbitraryArgs,
+		Long: `Infra renders one table definition per compiled table into --out
+(default infra/): table_<name>.cfn.yaml for --format cfn, or
+table_<name>.tf for --format tf. Tables are PAY_PER_REQUEST with PITR and
+deletion protection enabled; TTL is configured when an entity declares
+ttl=.`,
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return errors.New("not implemented")
+			if format != "cfn" && format != "tf" {
+				return fmt.Errorf("unknown --format %q (want cfn or tf)", format)
+			}
+			return runInfra(args, format, outDir, cmd)
 		},
 	}
 	cmd.Flags().StringVar(&format, "format", "cfn", "output format: cfn or tf")
+	cmd.Flags().StringVar(&outDir, "out", "infra", "output directory")
 	return cmd
 }
 
@@ -62,9 +71,12 @@ func newDocsCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "docs [packages]",
 		Short: "Emit ACCESS_PATTERNS.md access-pattern matrix",
-		Args:  cobra.ArbitraryArgs,
+		Long: `Docs writes ACCESS_PATTERNS.md next to each annotated package: one row
+per declared pattern plus one per item-collection partition, derived from
+the same parse as the generated code.`,
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return errors.New("not implemented")
+			return runDocs(args, cmd)
 		},
 	}
 }
