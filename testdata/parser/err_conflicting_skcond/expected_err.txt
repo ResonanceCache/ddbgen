@@ -1,0 +1,3 @@
+input.go:5:61: conflicting sort-key conditions: a pattern takes at most one sk.* condition
+	//ddb:pattern name=Orders index=main pk="TENANT#{TenantID}" sk.begins="ORDER#" sk.eq="ORDER#{ID}"
+	                                                            ^

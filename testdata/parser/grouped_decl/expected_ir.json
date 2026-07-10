@@ -1,0 +1,53 @@
+{
+  "tables": [
+    {
+      "name": "app",
+      "entities": [
+        {
+          "name": "User",
+          "table": "app",
+          "type": "user",
+          "et_attr": "kind",
+          "key": {
+            "pk": {
+              "raw": "USER#{ID}",
+              "segments": [
+                {
+                  "kind": "lit",
+                  "literal": "USER"
+                },
+                {
+                  "kind": "ph",
+                  "field": "ID"
+                }
+              ]
+            },
+            "sk": {
+              "raw": "PROFILE",
+              "segments": [
+                {
+                  "kind": "lit",
+                  "literal": "PROFILE"
+                }
+              ]
+            }
+          },
+          "fields": [
+            {
+              "name": "ID",
+              "go_type": "string",
+              "attr": "id"
+            },
+            {
+              "name": "Email",
+              "go_type": "string",
+              "attr": "Email"
+            }
+          ],
+          "go_package": "grouped"
+        }
+      ],
+      "go_package": "grouped"
+    }
+  ]
+}

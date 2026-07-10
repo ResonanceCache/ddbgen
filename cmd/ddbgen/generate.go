@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 
+	"github.com/ResonanceCache/ddbgen/internal/schema"
 	"github.com/spf13/cobra"
 )
 
@@ -18,7 +19,7 @@ is written alongside; breaking schema changes against an existing snapshot
 fail the run unless --force is given.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return errors.New("not implemented")
+			return runGenerate(args, force, cmd)
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "allow breaking schema changes against the snapshot")
@@ -29,9 +30,12 @@ func newDiffCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "diff [packages]",
 		Short: "Check the schema against the committed snapshot (read-only)",
-		Args:  cobra.ArbitraryArgs,
+		Long: `Diff recompiles the schema and compares it with the committed
+` + schema.SnapshotName + ` without writing anything. Additive changes are
+reported; breaking changes exit nonzero. Intended for CI.`,
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return errors.New("not implemented")
+			return runDiff(args, cmd)
 		},
 	}
 }
@@ -59,4 +63,13 @@ func newDocsCmd() *cobra.Command {
 			return errors.New("not implemented")
 		},
 	}
+}
+
+// generateInto is the per-directory code generation step. Code emission
+// lands in M3; until then generate only validates and snapshots.
+func generateInto(dir string, sub *schema.Schema, stdout printer) error {
+	_ = dir
+	_ = sub
+	_ = stdout
+	return nil
 }

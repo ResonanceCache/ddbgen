@@ -1,0 +1,3 @@
+input.go:7:81: sk.between takes no value; both bounds are supplied through the generated Between method
+	//ddb:pattern name=OrdersInWindow index=main pk="TENANT#{TenantID}" sk.between="ORDER#"
+	                                                                                ^

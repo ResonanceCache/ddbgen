@@ -1,0 +1,3 @@
+input.go:5:7: unknown directive "pattren" (want entity, key, index, or pattern)
+	//ddb:pattren name=ByID index=main pk="ORDER#{ID}"
+	      ^

@@ -1,0 +1,3 @@
+input.go:3:35: unknown entity argument "shard" (want one of: table, type, version, ttl, et)
+	//ddb:entity table=app type=order shard=4
+	                                  ^

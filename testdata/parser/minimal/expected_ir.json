@@ -1,0 +1,44 @@
+{
+  "tables": [
+    {
+      "name": "cfg",
+      "entities": [
+        {
+          "name": "Config",
+          "table": "cfg",
+          "type": "config",
+          "et_attr": "_et",
+          "key": {
+            "pk": {
+              "raw": "CONFIG#{Name}",
+              "segments": [
+                {
+                  "kind": "lit",
+                  "literal": "CONFIG"
+                },
+                {
+                  "kind": "ph",
+                  "field": "Name"
+                }
+              ]
+            }
+          },
+          "fields": [
+            {
+              "name": "Name",
+              "go_type": "string",
+              "attr": "name"
+            },
+            {
+              "name": "Value",
+              "go_type": "string",
+              "attr": "value"
+            }
+          ],
+          "go_package": "minimal"
+        }
+      ],
+      "go_package": "minimal"
+    }
+  ]
+}

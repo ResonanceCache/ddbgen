@@ -1,0 +1,3 @@
+input.go:4:15: invalid segment "ORD{ID}": a segment must be a pure literal or a single {Field[:encoder]} placeholder
+	//ddb:key pk="ORD{ID}"
+	              ^

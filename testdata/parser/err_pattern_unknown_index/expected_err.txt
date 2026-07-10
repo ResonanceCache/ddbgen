@@ -1,0 +1,3 @@
+input.go:5:35: pattern ByStatus references index "GSI9", but entity Order declares no //ddb:index with that name
+	//ddb:pattern name=ByStatus index=GSI9 pk="STATUS#{Status}"
+	                                  ^

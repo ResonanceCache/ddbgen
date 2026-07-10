@@ -1,0 +1,244 @@
+{
+  "tables": [
+    {
+      "name": "app",
+      "entities": [
+        {
+          "name": "Order",
+          "table": "app",
+          "type": "order",
+          "et_attr": "_et",
+          "version_field": "Ver",
+          "ttl_field": "ExpiresAt",
+          "key": {
+            "pk": {
+              "raw": "TENANT#{TenantID}",
+              "segments": [
+                {
+                  "kind": "lit",
+                  "literal": "TENANT"
+                },
+                {
+                  "kind": "ph",
+                  "field": "TenantID"
+                }
+              ]
+            },
+            "sk": {
+              "raw": "ORDER#{CreatedAt:rfc3339}#{OrderID}",
+              "segments": [
+                {
+                  "kind": "lit",
+                  "literal": "ORDER"
+                },
+                {
+                  "kind": "ph",
+                  "field": "CreatedAt",
+                  "encoder": "rfc3339"
+                },
+                {
+                  "kind": "ph",
+                  "field": "OrderID"
+                }
+              ]
+            }
+          },
+          "indexes": [
+            {
+              "name": "GSI1",
+              "key": {
+                "pk": {
+                  "raw": "STATUS#{Status:upper}",
+                  "segments": [
+                    {
+                      "kind": "lit",
+                      "literal": "STATUS"
+                    },
+                    {
+                      "kind": "ph",
+                      "field": "Status",
+                      "encoder": "upper"
+                    }
+                  ]
+                },
+                "sk": {
+                  "raw": "{UpdatedAt:epoch}",
+                  "segments": [
+                    {
+                      "kind": "ph",
+                      "field": "UpdatedAt",
+                      "encoder": "epoch"
+                    }
+                  ]
+                }
+              },
+              "projection": "all"
+            }
+          ],
+          "patterns": [
+            {
+              "name": "OrdersByStatus",
+              "index": "GSI1",
+              "pk": {
+                "raw": "STATUS#{Status:upper}",
+                "segments": [
+                  {
+                    "kind": "lit",
+                    "literal": "STATUS"
+                  },
+                  {
+                    "kind": "ph",
+                    "field": "Status",
+                    "encoder": "upper"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "OrdersByTenant",
+              "index": "main",
+              "pk": {
+                "raw": "TENANT#{TenantID}",
+                "segments": [
+                  {
+                    "kind": "lit",
+                    "literal": "TENANT"
+                  },
+                  {
+                    "kind": "ph",
+                    "field": "TenantID"
+                  }
+                ]
+              },
+              "sk_cond": "begins",
+              "sk_value": {
+                "raw": "ORDER#",
+                "segments": [
+                  {
+                    "kind": "lit",
+                    "literal": "ORDER"
+                  }
+                ],
+                "trailing_delim": true
+              }
+            }
+          ],
+          "fields": [
+            {
+              "name": "TenantID",
+              "go_type": "string",
+              "attr": "tenant_id"
+            },
+            {
+              "name": "OrderID",
+              "go_type": "string",
+              "attr": "order_id"
+            },
+            {
+              "name": "Status",
+              "go_type": "string",
+              "attr": "status"
+            },
+            {
+              "name": "Total",
+              "go_type": "int64",
+              "attr": "total"
+            },
+            {
+              "name": "CreatedAt",
+              "go_type": "time.Time",
+              "attr": "created_at"
+            },
+            {
+              "name": "UpdatedAt",
+              "go_type": "time.Time",
+              "attr": "updated_at"
+            },
+            {
+              "name": "Ver",
+              "go_type": "int64",
+              "attr": "v"
+            },
+            {
+              "name": "ExpiresAt",
+              "go_type": "int64",
+              "attr": "exp",
+              "omit_empty": true
+            }
+          ],
+          "go_package": "ecommerce"
+        },
+        {
+          "name": "Payment",
+          "table": "app",
+          "type": "payment",
+          "et_attr": "_et",
+          "key": {
+            "pk": {
+              "raw": "TENANT#{TenantID}",
+              "segments": [
+                {
+                  "kind": "lit",
+                  "literal": "TENANT"
+                },
+                {
+                  "kind": "ph",
+                  "field": "TenantID"
+                }
+              ]
+            },
+            "sk": {
+              "raw": "PAY#{OrderID}#{PaymentID}",
+              "segments": [
+                {
+                  "kind": "lit",
+                  "literal": "PAY"
+                },
+                {
+                  "kind": "ph",
+                  "field": "OrderID"
+                },
+                {
+                  "kind": "ph",
+                  "field": "PaymentID"
+                }
+              ]
+            }
+          },
+          "fields": [
+            {
+              "name": "TenantID",
+              "go_type": "string",
+              "attr": "tenant_id"
+            },
+            {
+              "name": "OrderID",
+              "go_type": "string",
+              "attr": "order_id"
+            },
+            {
+              "name": "PaymentID",
+              "go_type": "string",
+              "attr": "payment_id"
+            },
+            {
+              "name": "AmountCts",
+              "go_type": "int64",
+              "attr": "amount_cts"
+            }
+          ],
+          "go_package": "ecommerce"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "GSI1",
+          "pk_attr": "gsi1pk",
+          "sk_attr": "gsi1sk",
+          "projection": "all"
+        }
+      ],
+      "go_package": "ecommerce"
+    }
+  ]
+}

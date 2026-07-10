@@ -1,0 +1,3 @@
+input.go:6:55: unknown encoder "rfc9999" (want rfc3339, epoch, epochms, pad<N>, upper, lower, hex, ulid, or urlenc)
+	//ddb:key pk="TENANT#{TenantID}" sk="ORDER#{CreatedAt:rfc9999}"
+	                                                      ^
