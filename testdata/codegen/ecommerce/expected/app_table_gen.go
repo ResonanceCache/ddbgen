@@ -3,7 +3,12 @@
 package ecommerce
 
 import (
+	"context"
+
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+
+	"github.com/ResonanceCache/ddbgen/runtime"
 )
 
 // AppClient is a typed client for the single-table design on table
@@ -21,3 +26,78 @@ func NewAppClient(ddb *dynamodb.Client, table string) *AppClient {
 // AppItem is the sealed union of entity types stored in table
 // "app": Order, Payment.
 type AppItem interface{ isAppItem() }
+
+// TenantPartitionQuery queries every item in one "TENANT#{TenantID}"
+// partition. Terminate with Collect.
+type TenantPartitionQuery struct {
+	c          *AppClient
+	pk         string
+	consistent bool
+	err        error
+}
+
+// TenantPartition starts a partition query over the item collection holding
+// Order, Payment items.
+func (c *AppClient) TenantPartition(tenantID string) *TenantPartitionQuery {
+	q := &TenantPartitionQuery{c: c}
+	pk, err := orderPK(tenantID)
+	if err != nil {
+		q.err = err
+		return q
+	}
+	q.pk = pk
+	return q
+}
+
+// ConsistentRead makes the partition query strongly consistent.
+func (q *TenantPartitionQuery) ConsistentRead() *TenantPartitionQuery {
+	q.consistent = true
+	return q
+}
+
+// Collect drains the partition and dispatches every item by its
+// entity-type attribute into a typed collection.
+func (q *TenantPartitionQuery) Collect(ctx context.Context) (*TenantCollection, error) {
+	if q.err != nil {
+		return nil, q.err
+	}
+	col := &TenantCollection{}
+	spec := runtime.QuerySpec{
+		Table:      q.c.table,
+		PKAttr:     "pk",
+		PKValue:    q.pk,
+		Consistent: q.consistent,
+	}
+	for av, err := range runtime.QueryAllRaw(ctx, q.c.ddb, spec) {
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case runtime.EntityType(av, "_et") == "order":
+			it, err := unmarshalOrder(av)
+			if err != nil {
+				return nil, err
+			}
+			col.Orders = append(col.Orders, *it)
+		case runtime.EntityType(av, "_et") == "payment":
+			it, err := unmarshalPayment(av)
+			if err != nil {
+				return nil, err
+			}
+			col.Payments = append(col.Payments, *it)
+		default:
+			col.Unknown = append(col.Unknown, av)
+		}
+	}
+	return col, nil
+}
+
+// TenantCollection is the typed contents of one "TENANT#{TenantID}"
+// partition.
+type TenantCollection struct {
+	Orders   []Order
+	Payments []Payment
+	// Unknown holds items whose entity-type attribute matches no generated
+	// entity (for example, items written by a newer schema).
+	Unknown []map[string]types.AttributeValue
+}

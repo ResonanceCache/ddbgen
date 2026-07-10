@@ -5,6 +5,7 @@ package ecommerce
 import (
 	"context"
 	"fmt"
+	"iter"
 	"strconv"
 	"strings"
 	"time"
@@ -408,4 +409,336 @@ func (u *OrderUpdate) Run(ctx context.Context) (*Order, error) {
 		return nil, fmt.Errorf("OrderUpdate: %w", err)
 	}
 	return unmarshalOrder(out.Attributes)
+}
+
+// OrdersByStatusQuery is the chainable builder for the OrdersByStatus access
+// pattern. Terminate with All or Page.
+type OrdersByStatusQuery struct {
+	c        *AppClient
+	pk       string
+	skPrefix string
+	cond     runtime.SKCond
+	refined  bool
+	desc     bool
+	limit    int32
+	err      error
+}
+
+// OrdersByStatus queries pk = "STATUS#{Status:upper}" on GSI GSI1.
+func (c *AppClient) OrdersByStatus(status string) *OrdersByStatusQuery {
+	q := &OrdersByStatusQuery{c: c}
+	pk, err := orderGSI1PK(status)
+	if err != nil {
+		q.err = err
+		return q
+	}
+	q.pk = pk
+	return q
+}
+
+// UpdatedAfter restricts results to items with UpdatedAt strictly
+// after val, at the epoch encoding's granularity. Bounds stay
+// inside the pattern's key scope, so entities sharing the partition can
+// never leak into the results.
+func (q *OrdersByStatusQuery) UpdatedAfter(val time.Time) *OrdersByStatusQuery {
+	if !q.beginRefine() {
+		return q
+	}
+	enc, err := runtime.EncodeEpochTime(val)
+	if err != nil {
+		q.err = fmt.Errorf("UpdatedAfter: %w", err)
+		return q
+	}
+	q.cond = runtime.SKAfter(q.skPrefix, q.skPrefix+enc)
+	return q
+}
+
+// UpdatedBefore restricts results to items with UpdatedAt strictly
+// before val, at the epoch encoding's granularity.
+func (q *OrdersByStatusQuery) UpdatedBefore(val time.Time) *OrdersByStatusQuery {
+	if !q.beginRefine() {
+		return q
+	}
+	enc, err := runtime.EncodeEpochTime(val)
+	if err != nil {
+		q.err = fmt.Errorf("UpdatedBefore: %w", err)
+		return q
+	}
+	pred, ok := runtime.PredEpoch(val.Unix())
+	q.cond = runtime.SKBefore(q.skPrefix, q.skPrefix+enc, q.skPrefix+pred, ok)
+	return q
+}
+
+// UpdatedBetween restricts results to items with UpdatedAt between lo
+// and hi inclusive.
+func (q *OrdersByStatusQuery) UpdatedBetween(lo, hi time.Time) *OrdersByStatusQuery {
+	if !q.beginRefine() {
+		return q
+	}
+	encLo, err := runtime.EncodeEpochTime(lo)
+	if err != nil {
+		q.err = fmt.Errorf("UpdatedBetween: %w", err)
+		return q
+	}
+	encHi, err := runtime.EncodeEpochTime(hi)
+	if err != nil {
+		q.err = fmt.Errorf("UpdatedBetween: %w", err)
+		return q
+	}
+	q.cond = runtime.SKBetween(q.skPrefix+encLo, q.skPrefix+encHi)
+	return q
+}
+
+// beginRefine reports whether a range refinement may be applied, guarding
+// against conflicting refinements.
+func (q *OrdersByStatusQuery) beginRefine() bool {
+	if q.err != nil {
+		return false
+	}
+	if q.refined {
+		q.err = fmt.Errorf("OrdersByStatusQuery: conflicting range refinements")
+		return false
+	}
+	q.refined = true
+	return true
+}
+
+// Desc returns results in descending key order.
+func (q *OrdersByStatusQuery) Desc() *OrdersByStatusQuery {
+	q.desc = true
+	return q
+}
+
+// Limit caps the number of items DynamoDB evaluates per page.
+func (q *OrdersByStatusQuery) Limit(n int32) *OrdersByStatusQuery {
+	q.limit = n
+	return q
+}
+
+func (q *OrdersByStatusQuery) spec() runtime.QuerySpec {
+	return runtime.QuerySpec{
+		Table:   q.c.table,
+		Index:   "GSI1",
+		PKAttr:  "gsi1pk",
+		PKValue: q.pk,
+		SKAttr:  "gsi1sk",
+		SKCond:  q.cond,
+		Desc:    q.desc,
+		Limit:   q.limit,
+	}
+}
+
+// All returns an iterator over every matching Order, paginating
+// internally. Iteration stops after yielding the first error.
+func (q *OrdersByStatusQuery) All(ctx context.Context) iter.Seq2[Order, error] {
+	if q.err != nil {
+		return func(yield func(Order, error) bool) {
+			var zero Order
+			yield(zero, q.err)
+		}
+	}
+	return runtime.QueryAll(ctx, q.c.ddb, q.spec(), unmarshalOrder)
+}
+
+// Page returns one page of matching Order items plus the cursor of
+// the next page ("" when exhausted). Pass a zero cursor to start.
+func (q *OrdersByStatusQuery) Page(ctx context.Context, cursor runtime.Cursor) ([]Order, runtime.Cursor, error) {
+	if q.err != nil {
+		return nil, "", q.err
+	}
+	return runtime.QueryPage(ctx, q.c.ddb, q.spec(), cursor, unmarshalOrder)
+}
+
+// OrdersByTenantQuery is the chainable builder for the OrdersByTenant access
+// pattern. Terminate with All or Page.
+type OrdersByTenantQuery struct {
+	c          *AppClient
+	pk         string
+	skPrefix   string
+	cond       runtime.SKCond
+	refined    bool
+	desc       bool
+	limit      int32
+	consistent bool
+	err        error
+}
+
+// OrdersByTenant queries pk = "TENANT#{TenantID}", sk begins "ORDER#" on the main index.
+func (c *AppClient) OrdersByTenant(tenantID string) *OrdersByTenantQuery {
+	q := &OrdersByTenantQuery{c: c}
+	pk, err := orderPK(tenantID)
+	if err != nil {
+		q.err = err
+		return q
+	}
+	q.pk = pk
+	q.skPrefix = "ORDER#"
+	q.cond = runtime.SKBegins(q.skPrefix)
+	return q
+}
+
+// CreatedAfter restricts results to items with CreatedAt strictly
+// after val, at the rfc3339 encoding's granularity. Bounds stay
+// inside the pattern's key scope, so entities sharing the partition can
+// never leak into the results.
+func (q *OrdersByTenantQuery) CreatedAfter(val time.Time) *OrdersByTenantQuery {
+	if !q.beginRefine() {
+		return q
+	}
+	enc, err := runtime.EncodeRFC3339(val)
+	if err != nil {
+		q.err = fmt.Errorf("CreatedAfter: %w", err)
+		return q
+	}
+	q.cond = runtime.SKAfter(q.skPrefix, q.skPrefix+enc)
+	return q
+}
+
+// CreatedBefore restricts results to items with CreatedAt strictly
+// before val, at the rfc3339 encoding's granularity.
+func (q *OrdersByTenantQuery) CreatedBefore(val time.Time) *OrdersByTenantQuery {
+	if !q.beginRefine() {
+		return q
+	}
+	enc, err := runtime.EncodeRFC3339(val)
+	if err != nil {
+		q.err = fmt.Errorf("CreatedBefore: %w", err)
+		return q
+	}
+	pred, ok := runtime.PredRFC3339(val)
+	q.cond = runtime.SKBefore(q.skPrefix, q.skPrefix+enc, q.skPrefix+pred, ok)
+	return q
+}
+
+// CreatedBetween restricts results to items with CreatedAt between lo
+// and hi inclusive.
+func (q *OrdersByTenantQuery) CreatedBetween(lo, hi time.Time) *OrdersByTenantQuery {
+	if !q.beginRefine() {
+		return q
+	}
+	encLo, err := runtime.EncodeRFC3339(lo)
+	if err != nil {
+		q.err = fmt.Errorf("CreatedBetween: %w", err)
+		return q
+	}
+	encHi, err := runtime.EncodeRFC3339(hi)
+	if err != nil {
+		q.err = fmt.Errorf("CreatedBetween: %w", err)
+		return q
+	}
+	q.cond = runtime.SKBetween(q.skPrefix+encLo, q.skPrefix+encHi)
+	return q
+}
+
+// beginRefine reports whether a range refinement may be applied, guarding
+// against conflicting refinements.
+func (q *OrdersByTenantQuery) beginRefine() bool {
+	if q.err != nil {
+		return false
+	}
+	if q.refined {
+		q.err = fmt.Errorf("OrdersByTenantQuery: conflicting range refinements")
+		return false
+	}
+	q.refined = true
+	return true
+}
+
+// Desc returns results in descending key order.
+func (q *OrdersByTenantQuery) Desc() *OrdersByTenantQuery {
+	q.desc = true
+	return q
+}
+
+// Limit caps the number of items DynamoDB evaluates per page.
+func (q *OrdersByTenantQuery) Limit(n int32) *OrdersByTenantQuery {
+	q.limit = n
+	return q
+}
+
+// ConsistentRead makes the query strongly consistent.
+func (q *OrdersByTenantQuery) ConsistentRead() *OrdersByTenantQuery {
+	q.consistent = true
+	return q
+}
+
+func (q *OrdersByTenantQuery) spec() runtime.QuerySpec {
+	return runtime.QuerySpec{
+		Table:      q.c.table,
+		PKAttr:     "pk",
+		PKValue:    q.pk,
+		SKAttr:     "sk",
+		SKCond:     q.cond,
+		Desc:       q.desc,
+		Limit:      q.limit,
+		Consistent: q.consistent,
+	}
+}
+
+// All returns an iterator over every matching Order, paginating
+// internally. Iteration stops after yielding the first error.
+func (q *OrdersByTenantQuery) All(ctx context.Context) iter.Seq2[Order, error] {
+	if q.err != nil {
+		return func(yield func(Order, error) bool) {
+			var zero Order
+			yield(zero, q.err)
+		}
+	}
+	return runtime.QueryAll(ctx, q.c.ddb, q.spec(), unmarshalOrder)
+}
+
+// Page returns one page of matching Order items plus the cursor of
+// the next page ("" when exhausted). Pass a zero cursor to start.
+func (q *OrdersByTenantQuery) Page(ctx context.Context, cursor runtime.Cursor) ([]Order, runtime.Cursor, error) {
+	if q.err != nil {
+		return nil, "", q.err
+	}
+	return runtime.QueryPage(ctx, q.c.ddb, q.spec(), cursor, unmarshalOrder)
+}
+
+// BatchGetOrders loads Orders by key in chunks of
+// 100, retrying unprocessed keys with jittered backoff. Missing keys are
+// omitted from the result. On exhausted retries the fetched subset is
+// returned along with runtime.ErrUnprocessedRemain.
+func (c *AppClient) BatchGetOrders(ctx context.Context, keys []OrderKey) ([]Order, error) {
+	kk := make([]map[string]types.AttributeValue, 0, len(keys))
+	for _, k := range keys {
+		pk, err := orderPK(k.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		sk, err := orderSK(k.CreatedAt, k.OrderID)
+		if err != nil {
+			return nil, err
+		}
+		kk = append(kk, map[string]types.AttributeValue{
+			"pk": &types.AttributeValueMemberS{Value: pk},
+			"sk": &types.AttributeValueMemberS{Value: sk},
+		})
+	}
+	raw, err := runtime.BatchGet(ctx, c.ddb, c.table, kk)
+	out := make([]Order, 0, len(raw))
+	for _, av := range raw {
+		it, uerr := unmarshalOrder(av)
+		if uerr != nil {
+			return nil, uerr
+		}
+		out = append(out, *it)
+	}
+	return out, err
+}
+
+// BatchPutOrders writes items in chunks of 25, retrying
+// unprocessed writes with jittered backoff. Batch writes bypass
+// optimistic locking: items are written with their current Ver as-is.
+func (c *AppClient) BatchPutOrders(ctx context.Context, items []Order) error {
+	avs := make([]map[string]types.AttributeValue, 0, len(items))
+	for i := range items {
+		av, err := marshalOrder(&items[i])
+		if err != nil {
+			return err
+		}
+		avs = append(avs, av)
+	}
+	return runtime.BatchWrite(ctx, c.ddb, c.table, avs)
 }

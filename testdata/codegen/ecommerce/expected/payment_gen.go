@@ -259,3 +259,49 @@ func (u *PaymentUpdate) Run(ctx context.Context) (*Payment, error) {
 	}
 	return unmarshalPayment(out.Attributes)
 }
+
+// BatchGetPayments loads Payments by key in chunks of
+// 100, retrying unprocessed keys with jittered backoff. Missing keys are
+// omitted from the result. On exhausted retries the fetched subset is
+// returned along with runtime.ErrUnprocessedRemain.
+func (c *AppClient) BatchGetPayments(ctx context.Context, keys []PaymentKey) ([]Payment, error) {
+	kk := make([]map[string]types.AttributeValue, 0, len(keys))
+	for _, k := range keys {
+		pk, err := paymentPK(k.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		sk, err := paymentSK(k.OrderID, k.PaymentID)
+		if err != nil {
+			return nil, err
+		}
+		kk = append(kk, map[string]types.AttributeValue{
+			"pk": &types.AttributeValueMemberS{Value: pk},
+			"sk": &types.AttributeValueMemberS{Value: sk},
+		})
+	}
+	raw, err := runtime.BatchGet(ctx, c.ddb, c.table, kk)
+	out := make([]Payment, 0, len(raw))
+	for _, av := range raw {
+		it, uerr := unmarshalPayment(av)
+		if uerr != nil {
+			return nil, uerr
+		}
+		out = append(out, *it)
+	}
+	return out, err
+}
+
+// BatchPutPayments writes items in chunks of 25, retrying
+// unprocessed writes with jittered backoff.
+func (c *AppClient) BatchPutPayments(ctx context.Context, items []Payment) error {
+	avs := make([]map[string]types.AttributeValue, 0, len(items))
+	for i := range items {
+		av, err := marshalPayment(&items[i])
+		if err != nil {
+			return err
+		}
+		avs = append(avs, av)
+	}
+	return runtime.BatchWrite(ctx, c.ddb, c.table, avs)
+}

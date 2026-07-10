@@ -47,6 +47,24 @@ rationale per judgment call, per the handoff spec.
   attribute at read time**: DDB001 collision analysis plus two-sided bounds make
   cross-entity leakage structurally impossible, and a runtime `_et` filter would
   hide generator bugs rather than surface them.
+- **Partition queries are generated only for pk-template groups shared by two
+  or more entities** (structural equality of literals + encoders, field names
+  ignored). A single-entity "collection" is just that entity's pattern query.
+- **Batch writes bypass optimistic locking** (items are written with their
+  current version as-is); the generated godoc says so. Chunk/retry caps follow
+  the spec: 100/25 per request, 5 attempts, exponential backoff with full jitter,
+  then ErrUnprocessedRemain (BatchGet also returns the partial result set).
+- **Runtime package is ~830 lines, over the 500-line budget.** The overage is
+  the per-encoder decode inverses and predecessor functions plus the two-sided
+  range-bound constructors — correctness-critical logic that would otherwise be
+  duplicated into every generated package. Chose one tested copy over the line
+  budget.
+- **Update setters are skipped for fields appearing in multi-placeholder GSI
+  templates**: a lone setter cannot recompute such a key attribute. Setting
+  those fields requires Put. (Sole-placeholder GSI fields get setters that
+  resync the index key; that is the drift-prevention claim.)
+- **Add methods are generated for integer fields only** (not floats), and not
+  for GSI-templated or key fields.
 - **x/tools pinned to v0.29.0** (and x/sync v0.10.0) to keep the module's minimum
   Go language version at 1.23 per the handoff spec.
 

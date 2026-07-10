@@ -84,7 +84,9 @@ type entityView struct {
 
 	HasTTL bool
 
-	Updates []updateMethod
+	Updates  []updateMethod
+	Patterns []*patternView
+	Batch    batchView
 }
 
 // updateMethod is one generated method on the update builder.
@@ -108,14 +110,15 @@ type gsiSync struct {
 
 // tableView drives the per-table file template.
 type tableView struct {
-	Package  string
-	Table    string
-	Client   string // AppClient
-	Iface    string // AppItem
-	Entities []string
+	Package    string
+	Table      string
+	Client     string // AppClient
+	Iface      string // AppItem
+	Entities   []string
+	Partitions []*partitionView
 }
 
-func buildTableView(t *schema.Table) tableView {
+func buildTableView(t *schema.Table) (tableView, error) {
 	tv := tableView{
 		Package: t.GoPackage,
 		Table:   t.Name,
@@ -125,7 +128,12 @@ func buildTableView(t *schema.Table) tableView {
 	for _, e := range t.Entities {
 		tv.Entities = append(tv.Entities, e.Name)
 	}
-	return tv
+	parts, err := buildPartitionViews(t)
+	if err != nil {
+		return tv, err
+	}
+	tv.Partitions = parts
+	return tv, nil
 }
 
 func buildEntityView(t *schema.Table, e *schema.Entity) (*entityView, error) {
@@ -190,6 +198,10 @@ func buildEntityView(t *schema.Table, e *schema.Entity) (*entityView, error) {
 		return nil, err
 	}
 	ev.Updates = ups
+	if err := buildPatternViews(t, e, ev); err != nil {
+		return nil, err
+	}
+	ev.Batch = buildBatchView(ev)
 	return ev, nil
 }
 
