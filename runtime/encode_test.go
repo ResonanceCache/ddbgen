@@ -90,7 +90,7 @@ func TestPredecessors(t *testing.T) {
 	ts := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
 	enc, _ := EncodeRFC3339(ts)
 	pred, ok := PredRFC3339(ts)
-	if !ok || !(pred < enc) {
+	if !ok || pred >= enc {
 		t.Fatalf("PredRFC3339: %q not below %q", pred, enc)
 	}
 	if want, _ := EncodeRFC3339(ts.Add(-time.Nanosecond)); pred != want {

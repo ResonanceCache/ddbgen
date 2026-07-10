@@ -109,11 +109,11 @@ func checkOrder(t *testing.T, seg Segment, a, b any, semLess, semEqual bool) {
 			t.Fatalf("%s: equal values encode differently: %q vs %q", seg.Encoder, ea, eb)
 		}
 	case semLess:
-		if !(ea < eb) {
+		if ea >= eb {
 			t.Fatalf("%s: order broken: %v < %v but %q >= %q", seg.Encoder, a, b, ea, eb)
 		}
 	default:
-		if !(ea > eb) {
+		if ea <= eb {
 			t.Fatalf("%s: order broken: %v > %v but %q <= %q", seg.Encoder, a, b, ea, eb)
 		}
 	}

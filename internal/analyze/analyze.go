@@ -176,22 +176,30 @@ func checkVersionTTL(e *schema.Entity) Issues {
 		f, ok := e.Field(e.VersionField)
 		switch {
 		case !ok:
-			out = append(out, Issue{Code: "DDB005", Pos: e.Pos,
-				Msg: fmt.Sprintf("entity %s: version field %s does not resolve to an exported, marshaled field", e.Name, e.VersionField)})
+			out = append(out, Issue{
+				Code: "DDB005", Pos: e.Pos,
+				Msg: fmt.Sprintf("entity %s: version field %s does not resolve to an exported, marshaled field", e.Name, e.VersionField),
+			})
 		case f.GoType != "int" && f.GoType != "int32" && f.GoType != "int64":
-			out = append(out, Issue{Code: "DDB005", Pos: e.Pos,
-				Msg: fmt.Sprintf("entity %s: version field %s must be an integer type (int, int32, int64), got %s", e.Name, e.VersionField, f.GoType)})
+			out = append(out, Issue{
+				Code: "DDB005", Pos: e.Pos,
+				Msg: fmt.Sprintf("entity %s: version field %s must be an integer type (int, int32, int64), got %s", e.Name, e.VersionField, f.GoType),
+			})
 		}
 	}
 	if e.TTLField != "" {
 		f, ok := e.Field(e.TTLField)
 		switch {
 		case !ok:
-			out = append(out, Issue{Code: "DDB005", Pos: e.Pos,
-				Msg: fmt.Sprintf("entity %s: ttl field %s does not resolve to an exported, marshaled field", e.Name, e.TTLField)})
+			out = append(out, Issue{
+				Code: "DDB005", Pos: e.Pos,
+				Msg: fmt.Sprintf("entity %s: ttl field %s does not resolve to an exported, marshaled field", e.Name, e.TTLField),
+			})
 		case f.GoType != "int64":
-			out = append(out, Issue{Code: "DDB005", Pos: e.Pos,
-				Msg: fmt.Sprintf("entity %s: ttl field %s must be int64 (unix seconds), got %s", e.Name, e.TTLField, f.GoType)})
+			out = append(out, Issue{
+				Code: "DDB005", Pos: e.Pos,
+				Msg: fmt.Sprintf("entity %s: ttl field %s must be int64 (unix seconds), got %s", e.Name, e.TTLField, f.GoType),
+			})
 		}
 	}
 	return out
@@ -222,15 +230,19 @@ func checkSortability(e *schema.Entity) Issues {
 		}
 		cut := keytmpl.LeadingLiteralCut(key.SK)
 		if cut.Next == nil {
-			out = append(out, Issue{Code: "DDB003", Pos: p.Pos,
+			out = append(out, Issue{
+				Code: "DDB003", Pos: p.Pos,
 				Msg: fmt.Sprintf("pattern %s: declares sk.%s, but the sk template %q has no placeholder after its literal prefix to range over",
-					p.Name, p.SKCond, key.SK.Raw)})
+					p.Name, p.SKCond, key.SK.Raw),
+			})
 			continue
 		}
 		if !cut.RangeEligible(fieldTypes(e)) {
-			out = append(out, Issue{Code: "DDB003", Pos: p.Pos,
+			out = append(out, Issue{
+				Code: "DDB003", Pos: p.Pos,
 				Msg: fmt.Sprintf("pattern %s: declares sk.%s over placeholder %s, whose encoding is variable-width, so lexicographic key order diverges from value order (a longer value can sort before a shorter one that is semantically smaller); use a fixed-width encoder (rfc3339, epoch, epochms, pad<N>, ulid, hex of [N]byte)",
-					p.Name, p.SKCond, cut.Next)})
+					p.Name, p.SKCond, cut.Next),
+			})
 		}
 	}
 	return out
@@ -257,50 +269,64 @@ func checkPattern(e *schema.Entity, p *schema.Pattern) Issues {
 	var out Issues
 	key, ok := e.KeyFor(p.Index)
 	if !ok {
-		return Issues{{Code: "DDB002", Pos: p.Pos,
-			Msg: fmt.Sprintf("pattern %s: entity %s declares no index %q", p.Name, e.Name, p.Index)}}
+		return Issues{{
+			Code: "DDB002", Pos: p.Pos,
+			Msg: fmt.Sprintf("pattern %s: entity %s declares no index %q", p.Name, e.Name, p.Index),
+		}}
 	}
 	if !keytmpl.StructurallyEqual(p.PK, key.PK) {
-		out = append(out, Issue{Code: "DDB002", Pos: p.Pos,
+		out = append(out, Issue{
+			Code: "DDB002", Pos: p.Pos,
 			Msg: fmt.Sprintf("pattern %s: pk template %q is not structurally identical to the pk template %q of %s on entity %s (same literals, fields, and encoders required, or the generated method would query keys that are never written)",
-				p.Name, p.PK.Raw, key.PK.Raw, indexDesc(p.Index), e.Name)})
+				p.Name, p.PK.Raw, key.PK.Raw, indexDesc(p.Index), e.Name),
+		})
 	}
 	if p.SKCond == schema.SKNone && p.SKValue == nil {
 		return out
 	}
 	if key.SK == nil {
-		return append(out, Issue{Code: "DDB002", Pos: p.Pos,
-			Msg: fmt.Sprintf("pattern %s: declares a sort-key condition, but %s of entity %s has no sort key", p.Name, indexDesc(p.Index), e.Name)})
+		return append(out, Issue{
+			Code: "DDB002", Pos: p.Pos,
+			Msg: fmt.Sprintf("pattern %s: declares a sort-key condition, but %s of entity %s has no sort key", p.Name, indexDesc(p.Index), e.Name),
+		})
 	}
 	if p.SKValue == nil {
 		return out // bare between/gt/gte/lt/lte: refined through generated methods
 	}
 	cut, err := keytmpl.AlignPrefix(key.SK, p.SKValue, fieldTypes(e))
 	if err != nil {
-		return append(out, Issue{Code: "DDB002", Pos: p.Pos,
-			Msg: fmt.Sprintf("pattern %s: %v", p.Name, err)})
+		return append(out, Issue{
+			Code: "DDB002", Pos: p.Pos,
+			Msg: fmt.Sprintf("pattern %s: %v", p.Name, err),
+		})
 	}
 	switch p.SKCond {
 	case schema.SKEq:
 		if cut.Consumed != len(key.SK.Segments) || p.SKValue.TrailingDelim {
-			out = append(out, Issue{Code: "DDB002", Pos: p.Pos,
+			out = append(out, Issue{
+				Code: "DDB002", Pos: p.Pos,
 				Msg: fmt.Sprintf("pattern %s: sk.eq value %q must specify the complete sort key %q; keys shorter than the template are never written, so a prefix equality can never match (use sk.begins for prefixes)",
-					p.Name, p.SKValue.Raw, key.SK.Raw)})
+					p.Name, p.SKValue.Raw, key.SK.Raw),
+			})
 		}
 	case schema.SKGt, schema.SKGte, schema.SKLt, schema.SKLte:
 		segs := p.SKValue.Segments
 		if len(segs) == 0 || segs[len(segs)-1].Kind != keytmpl.SegPlaceholder || p.SKValue.TrailingDelim {
-			out = append(out, Issue{Code: "DDB002", Pos: p.Pos,
+			out = append(out, Issue{
+				Code: "DDB002", Pos: p.Pos,
 				Msg: fmt.Sprintf("pattern %s: sk.%s value %q must end with a placeholder (the range bound); a literal-terminated range does not cut at a placeholder boundary",
-					p.Name, p.SKCond, p.SKValue.Raw)})
+					p.Name, p.SKCond, p.SKValue.Raw),
+			})
 			break
 		}
 		last := segs[len(segs)-1]
 		goType, _ := fieldTypes(e)(last.Field)
 		if _, fixed := keytmpl.FixedWidth(last.Encoder, goType); !fixed {
-			out = append(out, Issue{Code: "DDB003", Pos: p.Pos,
+			out = append(out, Issue{
+				Code: "DDB003", Pos: p.Pos,
 				Msg: fmt.Sprintf("pattern %s: sk.%s ranges over placeholder %s, whose encoding is variable-width; lexicographic comparison would not follow value order — use a fixed-width encoder",
-					p.Name, p.SKCond, last)})
+					p.Name, p.SKCond, last),
+			})
 		}
 	}
 	return out
@@ -382,17 +408,21 @@ func checkDuplicates(t *schema.Table) Issues {
 	patterns := map[string]*schema.Entity{}
 	for _, e := range t.Entities {
 		if prev, dup := types[e.Type]; dup {
-			out = append(out, Issue{Code: "DDB006", Pos: e.Pos,
+			out = append(out, Issue{
+				Code: "DDB006", Pos: e.Pos,
 				Msg: fmt.Sprintf("entity type %q of %s duplicates entity %s (at %s); collection dispatch on the entity-type attribute would be ambiguous",
-					e.Type, e.Name, prev.Name, prev.Pos)})
+					e.Type, e.Name, prev.Name, prev.Pos),
+			})
 		} else {
 			types[e.Type] = e
 		}
 		for _, p := range e.Patterns {
 			if prev, dup := patterns[p.Name]; dup {
-				out = append(out, Issue{Code: "DDB006", Pos: p.Pos,
+				out = append(out, Issue{
+					Code: "DDB006", Pos: p.Pos,
 					Msg: fmt.Sprintf("pattern name %s on entity %s duplicates a pattern on entity %s; generated method names would collide",
-						p.Name, e.Name, prev.Name)})
+						p.Name, e.Name, prev.Name),
+				})
 			} else {
 				patterns[p.Name] = e
 			}

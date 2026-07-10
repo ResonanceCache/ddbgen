@@ -42,9 +42,11 @@ func TestEncodeDecodeTable(t *testing.T) {
 		want string
 	}{
 		{"TENANT#{TenantID}", map[string]any{"TenantID": "t1"}, "TENANT#t1"},
-		{"ORDER#{CreatedAt:rfc3339}#{OrderID}",
+		{
+			"ORDER#{CreatedAt:rfc3339}#{OrderID}",
 			map[string]any{"CreatedAt": ts, "OrderID": "o1"},
-			"ORDER#2026-07-09T12:30:45.123456789Z#o1"},
+			"ORDER#2026-07-09T12:30:45.123456789Z#o1",
+		},
 		{"{UpdatedAt:epoch}", map[string]any{"UpdatedAt": ts}, "001783600245"},
 		{"{MS:epochms}", map[string]any{"MS": int64(1_783_686_645_123)}, "001783686645123"},
 		{"N#{Num:pad6}", map[string]any{"Num": int64(42)}, "N#000042"},

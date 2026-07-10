@@ -51,7 +51,7 @@ func AlignPrefix(t *Template, p *Prefix, types FieldTypes) (*Cut, error) {
 				return nil, fmt.Errorf("condition %q placeholder %s does not match sk template %q placeholder %s",
 					p.Raw, ps, t.Raw, ts)
 			}
-			if last && !p.TrailingDelim && !(i == len(t.Segments)-1) {
+			if last && !p.TrailingDelim && i != len(t.Segments)-1 {
 				if _, fixed := placeholderWidth(ps, types); !fixed {
 					return nil, fmt.Errorf("condition %q ends inside placeholder %s: %s is variable-width, so the condition can match part of a value; end the condition with %q or use a fixed-width encoder",
 						p.Raw, ps, ps, Delimiter)

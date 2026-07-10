@@ -27,7 +27,41 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: stable
-      - name: Unit tests
+      - name: Unit tests (includes generated-code build test)
         run: go test ./...
       - name: Race detector (runtime package)
         run: go test -race ./runtime/...
+
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Schema snapshot drift check
+        run: go run ./cmd/ddbgen diff ./examples/ecommerce
+      - name: Generated code is current
+        run: |
+          go run ./cmd/ddbgen generate ./examples/ecommerce
+          go run ./cmd/ddbgen docs ./examples/ecommerce
+          go run ./cmd/ddbgen infra --format cfn --out examples/ecommerce/infra ./examples/ecommerce
+          go run ./cmd/ddbgen infra --format tf --out examples/ecommerce/infra ./examples/ecommerce
+          git diff --exit-code
+
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      dynamodb:
+        image: amazon/dynamodb-local
+        ports:
+          - 8000:8000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Integration tests against DynamoDB Local
+        run: go test -tags=integration ./examples/...
+        env:
+          DDB_TEST_ENDPOINT: http://localhost:8000

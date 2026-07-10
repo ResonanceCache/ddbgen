@@ -34,11 +34,11 @@ func TestGolden(t *testing.T) {
 			if *update {
 				if perr != nil {
 					writeFile(t, errPath, []byte(perr.Error()+"\n"))
-					os.Remove(irPath)
+					_ = os.Remove(irPath)
 					return
 				}
 				writeFile(t, irPath, marshalIR(t, s))
-				os.Remove(errPath)
+				_ = os.Remove(errPath)
 				return
 			}
 

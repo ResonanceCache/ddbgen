@@ -77,7 +77,31 @@ rationale per judgment call, per the handoff spec.
 - **x/tools pinned to v0.29.0** (and x/sync v0.10.0) to keep the module's minimum
   Go language version at 1.23 per the handoff spec.
 
+- **Put semantics with version=**: `Put<E>` treats a zero version as "create"
+  (condition `attribute_not_exists(pk)`) and any other value as "replace at
+  exactly that version"; the struct's version field is advanced in place on
+  success and restored on failure. `Put<E>IfNotExists` writes version 1 when the
+  field is zero. `Update.Run` always increments (`if_not_exists(v, 0) + 1`),
+  requires the item to exist, and only enforces a version match when
+  `ExpectVersion` was called — the caller may not have read the item first.
+- **sk.eq must consume the entire sk template** (DDB002); a prefix equality can
+  never match a stored key, and begins exists for prefixes.
+- **`ddbgen docs` writes ACCESS_PATTERNS.md into the annotated package
+  directory; `ddbgen infra` writes into --out (default infra/) relative to the
+  working directory; snapshots live next to generated code.** Matches sqlc's
+  outputs-near-inputs convention.
+- **Integration suite covers the batch chunking paths (30 items > one chunk)
+  but not the unprocessed-retry loop**: DynamoDB Local never returns
+  unprocessed keys/items under test-scale load. The retry loop is unit-level
+  logic in runtime/batch.go with the cap and jitter constants documented.
+
 ## Known gaps
+
+- Pattern queries against `projection=keys_only` GSIs unmarshal only key and
+  discriminator attributes; the generated method still returns full entity
+  structs whose non-projected fields are zero. Declare `projection=all` (the
+  default) for patterns that read item bodies.
+- The batch unprocessed-retry path is not exercised end-to-end (see above).
 
 - Valued `sk.lt` with a value that consumes the *entire* sk template includes an
   exact-match item at the boundary (BETWEEN is inclusive). Prefix values — the

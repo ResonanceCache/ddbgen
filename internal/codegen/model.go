@@ -16,14 +16,6 @@ type param struct {
 	Type  string // string, time.Time, ...
 }
 
-func paramList(ps []param) string {
-	parts := make([]string, len(ps))
-	for i, p := range ps {
-		parts[i] = p.Name + " " + p.Type
-	}
-	return strings.Join(parts, ", ")
-}
-
 func argList(ps []param) string {
 	parts := make([]string, len(ps))
 	for i, p := range ps {
