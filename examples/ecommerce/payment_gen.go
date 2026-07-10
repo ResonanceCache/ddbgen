@@ -78,8 +78,9 @@ func unmarshalPayment(av map[string]types.AttributeValue) (*Payment, error) {
 }
 
 // GetPayment loads the Payment identified by the given key fields.
-// It returns runtime.ErrNotFound when no such item exists.
-func (c *AppClient) GetPayment(ctx context.Context, tenantID string, orderID string, paymentID string) (*Payment, error) {
+// It returns runtime.ErrNotFound when no such item exists. Pass
+// runtime.WithConsistentRead() for a strongly consistent read.
+func (c *AppClient) GetPayment(ctx context.Context, tenantID string, orderID string, paymentID string, opts ...runtime.ReadOpt) (*Payment, error) {
 	pk, err := paymentPK(tenantID)
 	if err != nil {
 		return nil, err
@@ -88,13 +89,17 @@ func (c *AppClient) GetPayment(ctx context.Context, tenantID string, orderID str
 	if err != nil {
 		return nil, err
 	}
-	out, err := c.ddb.GetItem(ctx, &dynamodb.GetItemInput{
+	input := &dynamodb.GetItemInput{
 		TableName: aws.String(c.table),
 		Key: map[string]types.AttributeValue{
 			"pk": &types.AttributeValueMemberS{Value: pk},
 			"sk": &types.AttributeValueMemberS{Value: sk},
 		},
-	})
+	}
+	if runtime.ResolveReadOpts(opts).ConsistentRead {
+		input.ConsistentRead = aws.Bool(true)
+	}
+	out, err := c.ddb.GetItem(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("GetPayment: %w", err)
 	}
@@ -144,8 +149,9 @@ func (c *AppClient) PutPaymentIfNotExists(ctx context.Context, p *Payment) error
 }
 
 // DeletePayment deletes the Payment identified by the given key
-// fields. Deleting a missing item is not an error.
-func (c *AppClient) DeletePayment(ctx context.Context, tenantID string, orderID string, paymentID string) error {
+// fields. By default deleting a missing item is not an error; condition
+// the delete with runtime.WithMustExist().
+func (c *AppClient) DeletePayment(ctx context.Context, tenantID string, orderID string, paymentID string, opts ...runtime.DeleteOpt) error {
 	pk, err := paymentPK(tenantID)
 	if err != nil {
 		return err
@@ -154,13 +160,26 @@ func (c *AppClient) DeletePayment(ctx context.Context, tenantID string, orderID 
 	if err != nil {
 		return err
 	}
-	if _, err := c.ddb.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+	input := &dynamodb.DeleteItemInput{
 		TableName: aws.String(c.table),
 		Key: map[string]types.AttributeValue{
 			"pk": &types.AttributeValueMemberS{Value: pk},
 			"sk": &types.AttributeValueMemberS{Value: sk},
 		},
-	}); err != nil {
+	}
+	do := runtime.ResolveDeleteOpts(opts)
+	if do.ExpectVersion != nil {
+		return fmt.Errorf("DeletePayment: Payment declares no version field; WithExpectVersion is not applicable")
+	}
+	switch {
+	case do.MustExist:
+		input.ConditionExpression = aws.String("attribute_exists(#p0)")
+		input.ExpressionAttributeNames = map[string]string{"#p0": "pk"}
+	}
+	if _, err := c.ddb.DeleteItem(ctx, input); err != nil {
+		if runtime.IsConditionalCheckFailed(err) {
+			return fmt.Errorf("DeletePayment: %w", runtime.ErrNotFound)
+		}
 		return fmt.Errorf("DeletePayment: %w", err)
 	}
 	return nil
@@ -270,6 +289,7 @@ type PaymentsByOrderQuery struct {
 	cond       runtime.SKCond
 	desc       bool
 	limit      int32
+	filter     *runtime.Filter
 	consistent bool
 	err        error
 }
@@ -299,9 +319,21 @@ func (q *PaymentsByOrderQuery) Desc() *PaymentsByOrderQuery {
 	return q
 }
 
-// Limit caps the number of items DynamoDB evaluates per page.
+// Limit caps the number of items DynamoDB evaluates per page (it is a page
+// size, not a result cap: All still streams every page).
 func (q *PaymentsByOrderQuery) Limit(n int32) *PaymentsByOrderQuery {
 	q.limit = n
+	return q
+}
+
+// Filter applies a raw server-side filter expression on non-key
+// attributes — the escape hatch for predicates the key condition cannot
+// express. Alias names and value bindings are merged with the ones the
+// query already uses; #pk, #sk, #ddbet, :pk, :a, :b, and :ddbet are
+// reserved. Filtering runs after the key condition, so filtered-out items
+// still consume read capacity.
+func (q *PaymentsByOrderQuery) Filter(expression string, names map[string]string, values map[string]types.AttributeValue) *PaymentsByOrderQuery {
+	q.filter = &runtime.Filter{Expression: expression, Names: names, Values: values}
 	return q
 }
 
@@ -311,6 +343,9 @@ func (q *PaymentsByOrderQuery) ConsistentRead() *PaymentsByOrderQuery {
 	return q
 }
 
+// spec resolves the query. The entity-type filter makes the typed result
+// exact whatever else shares the partition; the key condition keeps the
+// scanned range tight.
 func (q *PaymentsByOrderQuery) spec() runtime.QuerySpec {
 	return runtime.QuerySpec{
 		Table:      q.c.table,
@@ -320,6 +355,9 @@ func (q *PaymentsByOrderQuery) spec() runtime.QuerySpec {
 		SKCond:     q.cond,
 		Desc:       q.desc,
 		Limit:      q.limit,
+		ETAttr:     "_et",
+		ETValue:    "payment",
+		Filter:     q.filter,
 		Consistent: q.consistent,
 	}
 }
@@ -346,10 +384,13 @@ func (q *PaymentsByOrderQuery) Page(ctx context.Context, cursor runtime.Cursor) 
 }
 
 // BatchGetPayments loads Payments by key in chunks of
-// 100, retrying unprocessed keys with jittered backoff. Missing keys are
-// omitted from the result. On exhausted retries the fetched subset is
-// returned along with runtime.ErrUnprocessedRemain.
-func (c *AppClient) BatchGetPayments(ctx context.Context, keys []PaymentKey) ([]Payment, error) {
+// 100, retrying unprocessed keys with jittered backoff. Duplicate keys are
+// fetched once; missing keys are omitted from the result. On exhausted
+// retries the fetched subset is returned along with a
+// *runtime.UnprocessedError (errors.Is runtime.ErrUnprocessedRemain)
+// carrying the leftover keys. Pass runtime.WithConsistentRead() for
+// strongly consistent reads.
+func (c *AppClient) BatchGetPayments(ctx context.Context, keys []PaymentKey, opts ...runtime.ReadOpt) ([]Payment, error) {
 	kk := make([]map[string]types.AttributeValue, 0, len(keys))
 	for _, k := range keys {
 		pk, err := paymentPK(k.TenantID)
@@ -365,7 +406,7 @@ func (c *AppClient) BatchGetPayments(ctx context.Context, keys []PaymentKey) ([]
 			"sk": &types.AttributeValueMemberS{Value: sk},
 		})
 	}
-	raw, err := runtime.BatchGet(ctx, c.ddb, c.table, kk)
+	raw, err := runtime.BatchGet(ctx, c.ddb, c.table, kk, runtime.ResolveReadOpts(opts).ConsistentRead)
 	out := make([]Payment, 0, len(raw))
 	for _, av := range raw {
 		it, uerr := unmarshalPayment(av)
@@ -378,7 +419,9 @@ func (c *AppClient) BatchGetPayments(ctx context.Context, keys []PaymentKey) ([]
 }
 
 // BatchPutPayments writes items in chunks of 25, retrying
-// unprocessed writes with jittered backoff.
+// unprocessed writes with jittered backoff. Two items with the same key
+// return runtime.ErrDuplicateKey; on exhausted retries a
+// *runtime.UnprocessedError carries the leftover writes.
 func (c *AppClient) BatchPutPayments(ctx context.Context, items []Payment) error {
 	avs := make([]map[string]types.AttributeValue, 0, len(items))
 	for i := range items {

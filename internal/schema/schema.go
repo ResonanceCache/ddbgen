@@ -186,9 +186,9 @@ func Compile(entities []*Entity) (*Schema, error) {
 		sort.Slice(ents, func(i, j int) bool { return ents[i].Name < ents[j].Name })
 		t := &Table{Name: name, Entities: ents, GoPackage: ents[0].GoPackage, Dir: ents[0].Dir}
 		for _, e := range ents {
-			if e.GoPackage != t.GoPackage {
-				return nil, fmt.Errorf("%s: table %q spans Go packages %q and %q; all entities of one table must live in one package",
-					e.Pos, name, t.GoPackage, e.GoPackage)
+			if e.GoPackage != t.GoPackage || e.Dir != t.Dir {
+				return nil, fmt.Errorf("%s: table %q spans Go packages (%s in %s vs %s in %s); all entities of one table must live in one package",
+					e.Pos, name, t.GoPackage, t.Dir, e.GoPackage, e.Dir)
 			}
 			if (e.Key.SK != nil) != (ents[0].Key.SK != nil) {
 				return nil, fmt.Errorf("%s: entity %s disagrees with entity %s (at %s) on whether table %q has a sort key; one physical key schema must fit all entities",
@@ -210,8 +210,17 @@ func Compile(entities []*Entity) (*Schema, error) {
 func mergeIndexes(ents []*Entity) ([]*Index, error) {
 	merged := map[string]*Index{}
 	owner := map[string]Pos{}
+	// Physical attribute names lowercase the GSI name, so names differing
+	// only in case would silently share attributes.
+	byLower := map[string]string{}
 	for _, e := range ents {
 		for _, ix := range e.Indexes {
+			lower := strings.ToLower(ix.Name)
+			if prev, ok := byLower[lower]; ok && prev != ix.Name {
+				return nil, fmt.Errorf("%s: GSI names %q and %q differ only in case and would share the physical key attributes %s/%s",
+					ix.Pos, prev, ix.Name, PKAttrFor(ix.Name), SKAttrFor(ix.Name))
+			}
+			byLower[lower] = ix.Name
 			def := &Index{
 				Name:       ix.Name,
 				PKAttr:     PKAttrFor(ix.Name),

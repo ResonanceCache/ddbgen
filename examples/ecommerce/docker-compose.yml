@@ -3,4 +3,5 @@ services:
     image: amazon/dynamodb-local
     command: -jar DynamoDBLocal.jar -inMemory -sharedDb
     ports:
-      - "8000:8000"
+      # Override with DDB_PORT when 8000 is taken: DDB_PORT=8100 make demo
+      - "${DDB_PORT:-8000}:8000"

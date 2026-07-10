@@ -49,14 +49,16 @@ Hand-written single-table DynamoDB code fails in two quiet ways:
    generated marshal and update paths; there is no write site to miss.
 2. **Stringly-typed everything.** Key conditions, expression names, reserved
    words, cursor plumbing, `begins_with` prefixes that quietly match the wrong
-   entity. Generated code makes each access pattern one typed method, aliases
-   every attribute name, and derives range bounds from the key template so a
-   query for orders can never return payments — even in shared partitions.
+   entity. Generated code makes each access pattern one typed method and
+   aliases every attribute name. Range bounds derived from the key template
+   keep the scanned range tight, and a server-side entity-type filter on every
+   pattern query makes the typed result exact: a query for orders cannot
+   return payments, even in shared partitions or hierarchical key designs.
 
 Static checks run at generate time: key collisions between entities,
-unsatisfiable patterns, unsortable key segments, encoder/type mismatches —
-each with a stable error code ([docs/checks.md](docs/checks.md)) and a
-file:line diagnostic.
+unsatisfiable patterns, unsortable key segments, encoder/type mismatches,
+reserved-attribute shadowing — each with a stable error code
+([docs/checks.md](docs/checks.md)) and a file:line diagnostic.
 
 ## Install
 
@@ -64,20 +66,31 @@ file:line diagnostic.
 go install github.com/ResonanceCache/ddbgen/cmd/ddbgen@latest
 ```
 
-Generated code depends on `aws-sdk-go-v2` and the tiny
-`github.com/ResonanceCache/ddbgen/runtime` package (no reflection in hot
-paths, ~800 lines, fully godoc'd). Go 1.23+ (`iter.Seq2`).
+Or pin it per-repo and invoke through `go generate` (the scaffold from
+`ddbgen init` includes this):
+
+```go
+//go:generate go run github.com/ResonanceCache/ddbgen/cmd/ddbgen generate .
+```
+
+Generated code depends on `aws-sdk-go-v2` and the
+`github.com/ResonanceCache/ddbgen/runtime` package (~1k lines, fully
+godoc'd; key encoding and expression assembly are reflection-free — item
+(un)marshaling uses the AWS `attributevalue` package, like hand-written
+SDK code would). Go 1.23+ (`iter.Seq2`).
 
 ## Quickstart
 
 1. Annotate your structs with `//ddb:` markers (see the model above, or
-   [examples/ecommerce/model.go](examples/ecommerce/model.go)).
-2. Generate:
+   [examples/ecommerce/model.go](examples/ecommerce/model.go)). All
+   entities of one table live in one package.
+2. Generate, then fetch the generated code's dependencies:
 
    ```sh
-   ddbgen generate ./...          # typed client + ddb.snapshot.json
-   ddbgen docs ./...              # ACCESS_PATTERNS.md
+   ddbgen generate ./...            # typed client + ddb.snapshot.json
+   ddbgen docs ./...                # ACCESS_PATTERNS.md
    ddbgen infra --format cfn ./...  # infra/table_<name>.cfn.yaml (or --format tf)
+   go mod tidy
    ```
 
 3. Wire it up:
@@ -87,9 +100,24 @@ paths, ~800 lines, fully godoc'd). Go 1.23+ (`iter.Seq2`).
    app := NewAppClient(ddb, "app")
    ```
 
-4. In CI, `ddbgen diff ./...` fails on breaking schema changes against the
-   committed snapshot (changed key templates, removed entities or patterns,
-   renamed physical attributes) and allows additive ones.
+4. In CI, `ddbgen diff ./...` fails (exit 1) on breaking schema changes
+   against the committed snapshot (changed key templates, removed entities
+   or patterns, renamed physical attributes, changed field types) and
+   allows additive ones.
+
+Package patterns resolve like `go vet`, relative to the current module —
+in a monorepo with nested modules, run ddbgen once per module.
+
+## Testing your code
+
+`NewAppClient` accepts the `runtime.DynamoDB` interface — the eight
+operations generated code uses — rather than a concrete `*dynamodb.Client`,
+following the AWS SDK for Go v2 testing guidance. Substitute a mock (or a
+wrapping middleware) in tests; see
+[testdata/codegen/bounds/harness_test.go](testdata/codegen/bounds/harness_test.go)
+for a complete in-memory fake that ddbgen's own test suite runs generated
+queries against. `client.DynamoDB()` and `client.TableName()` expose the
+underlying handle for raw operations the generated surface does not cover.
 
 Try the runnable example — five minutes, Docker required:
 
@@ -106,8 +134,13 @@ make demo          # starts DynamoDB Local, creates a table, runs every method c
 //ddb:index   name=<ident> pk="<template>" [sk="<template>"] [projection=all|keys_only]
 //ddb:pattern name=<Ident> index=main|<indexname> pk="<template>"
               [sk.eq="<template>" | sk.begins="<prefix>" |
+               sk.gt="<prefix>" | sk.gte="<prefix>" | sk.lt="<prefix>" | sk.lte="<prefix>" |
                sk.between | sk.gt | sk.gte | sk.lt | sk.lte]
 ```
+
+Valued range conditions (`sk.gt="ORDER#{CreatedAt:rfc3339}"`) fix the bound
+in the marker; the bare flags declare intent and take their bounds at call
+time through the generated `<Field>After/Before/Between` methods.
 
 | marker | what it declares |
 |---|---|
@@ -143,12 +176,43 @@ random pairs per encoder).
 Every `generate`/`diff` run enforces ([full docs](docs/checks.md)):
 
 - **DDB001** key collision/ambiguity between entities (conservative)
-- **DDB002** pattern satisfiability (pk identity, boundary-aligned sk conditions)
+- **DDB002** pattern satisfiability (pk identity, boundary-aligned sk conditions, no keys_only patterns)
 - **DDB003** sortability of range-condition placeholders
 - **DDB004** encoder/type compatibility
-- **DDB005** version/ttl field typing
+- **DDB005** version/ttl field typing (and neither may feed a key template)
 - **DDB006** duplicate entity types or pattern names per table
 - **DDB007** placeholder resolution
+- **DDB008** reserved attribute names (fields may not shadow `pk`/`sk`/GSI keys/`_et`)
+
+Beyond the coded checks, generation fails on colliding generated
+identifiers or file names, and key segments that encode to the empty
+string fail loudly at runtime (`runtime.ErrEmptySegment`) instead of
+writing junk index entries.
+
+## Query surface notes
+
+- Every pattern query carries a server-side `entity-type = <type>` filter;
+  key bounds keep the scanned range tight, the filter makes the typed
+  result exact. If other tools write items without the entity-type
+  attribute into the same table, those items are invisible to pattern
+  queries (partition `Collect()` surfaces them under `Unknown`).
+- `Filter(expr, names, values)` is the raw escape hatch for non-key
+  predicates; it composes with the entity filter. Filtered items still
+  consume read capacity.
+- `Limit(n)` is DynamoDB's per-page evaluated-items cap, not a result
+  cap: `All` still streams every page.
+- Reads: `runtime.WithConsistentRead()` on `Get*` and `BatchGet*` (main
+  index only). Deletes: `runtime.WithMustExist()` /
+  `runtime.WithExpectVersion(v)`.
+- Batch: `BatchGet*` dedupes keys (DynamoDB rejects duplicates wholesale);
+  `BatchPut*` returns `runtime.ErrDuplicateKey` for two writes to one key;
+  exhausted retries return a `*runtime.UnprocessedError` carrying the
+  leftovers.
+- `TransactPut*`/`TransactDelete*` build items for `TransactWrite` (at
+  most 100, atomic). Condition failures inside the transaction match both
+  `runtime.ErrConditionFailed` and the SDK's
+  `TransactionCanceledException` (with `CancellationReasons`) via
+  `errors.Is`/`errors.As`.
 
 ## Compared to
 
@@ -197,16 +261,29 @@ client per table already works. Cross-table niceties may come later.
 **Migrations?** Out of scope. The snapshot diff tells you *that* a change is
 breaking; deciding how to migrate stored keys is a human decision.
 
+**Why no config file?** Everything ddbgen needs lives in the markers, next
+to the structs they describe. A config file would be a second place for
+schema truth to drift.
+
+**Sparse GSIs?** Not yet. A zero-valued index source fails the write
+loudly (`runtime.ErrEmptySegment`) rather than silently indexing junk;
+conditional index membership is on the roadmap.
+
 ## Roadmap
 
+- sparse GSIs (conditional index membership)
+- projection expressions and count-only queries
+- streaming/paged item-collection queries (today `Collect()` drains)
+- `TransactGet` builders and transactional condition checks
 - CDK (Go) emitter
 - configurable delimiter and physical attribute names
 - shard-suffix key templates (write sharding)
 - LSI support if a compelling case shows up (see FAQ)
 
-Shipped beyond v1 scope: a thin `TransactWrite` passthrough
-(`TransactPut<Entity>` / `TransactDelete<Entity>` builders) and a
-`ddbgen init` scaffolder.
+Shipped beyond the original v1 scope: a thin `TransactWrite` passthrough
+(`TransactPut<Entity>` / `TransactDelete<Entity>` builders), a
+`ddbgen init` scaffolder, interface-based client injection, raw filter
+expressions, consistent reads, and conditional deletes.
 
 ## License
 

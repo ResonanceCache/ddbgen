@@ -1,5 +1,5 @@
 // Package analyze implements ddbgen's generate-time static checks. Each
-// check carries a stable error code (DDB001..DDB007), documented in
+// check carries a stable error code (DDB001..DDB008), documented in
 // docs/checks.md. Checks are conservative: when template overlap cannot be
 // ruled out, they error with an explanation and a suggested fix.
 package analyze
@@ -57,13 +57,57 @@ func Schema(s *schema.Schema) Issues {
 func checkTable(t *schema.Table) Issues {
 	var out Issues
 	for _, e := range t.Entities {
-		out = append(out, checkPlaceholders(e)...) // DDB007 + DDB004
-		out = append(out, checkVersionTTL(e)...)   // DDB005
-		out = append(out, checkSortability(e)...)  // DDB003
-		out = append(out, checkPatterns(e)...)     // DDB002 (+ DDB003 for range values)
+		out = append(out, checkPlaceholders(e)...)  // DDB007 + DDB004
+		out = append(out, checkVersionTTL(e)...)    // DDB005
+		out = append(out, checkSortability(e)...)   // DDB003
+		out = append(out, checkPatterns(t, e)...)   // DDB002 (+ DDB003 for range values)
+		out = append(out, checkReservedAttrs(e)...) // DDB008
 	}
 	out = append(out, checkCollisions(t)...) // DDB001
 	out = append(out, checkDuplicates(t)...) // DDB006
+	return out
+}
+
+// --- DDB008 reserved attribute names ---
+
+// checkReservedAttrs rejects field attribute names that collide with the
+// synthesized physical key attributes or the entity-type attribute:
+// marshal overwrites those attributes after MarshalMap, so a colliding
+// field would be silently clobbered on write and corrupted on read.
+func checkReservedAttrs(e *schema.Entity) Issues {
+	reserved := map[string]string{
+		"pk":     "the physical partition-key attribute",
+		e.ETAttr: "the entity-type attribute",
+	}
+	if e.Key.SK != nil {
+		reserved["sk"] = "the physical sort-key attribute"
+	}
+	for _, ix := range e.Indexes {
+		reserved[schema.PKAttrFor(ix.Name)] = "the physical partition-key attribute of GSI " + ix.Name
+		if ix.Key.SK != nil {
+			reserved[schema.SKAttrFor(ix.Name)] = "the physical sort-key attribute of GSI " + ix.Name
+		}
+	}
+	var out Issues
+	attrs := map[string]string{}
+	for _, f := range e.Fields {
+		if what, hit := reserved[f.Attr]; hit {
+			out = append(out, Issue{
+				Code: "DDB008", Pos: e.Pos,
+				Msg: fmt.Sprintf("entity %s: field %s maps to attribute %q, which is %s; the synthesized value would silently overwrite the field on every write — pick another dynamodbav name",
+					e.Name, f.Name, f.Attr, what),
+			})
+		}
+		if prev, dup := attrs[f.Attr]; dup {
+			out = append(out, Issue{
+				Code: "DDB008", Pos: e.Pos,
+				Msg: fmt.Sprintf("entity %s: fields %s and %s both map to attribute %q; one write would silently win",
+					e.Name, prev, f.Name, f.Attr),
+			})
+		} else {
+			attrs[f.Attr] = f.Name
+		}
+	}
 	return out
 }
 
@@ -202,6 +246,27 @@ func checkVersionTTL(e *schema.Entity) Issues {
 			})
 		}
 	}
+	// Neither field may feed a key template: the version changes on every
+	// update without recomputing keys (the index would silently drift), and
+	// a TTL field in a key makes items unaddressable as expiry approaches.
+	for _, t := range templatesOf(e) {
+		for _, seg := range t.tm.Placeholders() {
+			if e.VersionField != "" && seg.Field == e.VersionField {
+				out = append(out, Issue{
+					Code: "DDB005", Pos: t.pos,
+					Msg: fmt.Sprintf("entity %s: version field %s is a placeholder in the %s template; every Update increments the version without recomputing keys, so the key would silently diverge from the data",
+						e.Name, e.VersionField, t.desc),
+				})
+			}
+			if e.TTLField != "" && seg.Field == e.TTLField {
+				out = append(out, Issue{
+					Code: "DDB005", Pos: t.pos,
+					Msg: fmt.Sprintf("entity %s: ttl field %s is a placeholder in the %s template; TTL fields change over an item's life and must not feed keys",
+						e.Name, e.TTLField, t.desc),
+				})
+			}
+		}
+	}
 	return out
 }
 
@@ -257,15 +322,15 @@ func fieldTypes(e *schema.Entity) keytmpl.FieldTypes {
 	}
 }
 
-func checkPatterns(e *schema.Entity) Issues {
+func checkPatterns(t *schema.Table, e *schema.Entity) Issues {
 	var out Issues
 	for _, p := range e.Patterns {
-		out = append(out, checkPattern(e, p)...)
+		out = append(out, checkPattern(t, e, p)...)
 	}
 	return out
 }
 
-func checkPattern(e *schema.Entity, p *schema.Pattern) Issues {
+func checkPattern(t *schema.Table, e *schema.Entity, p *schema.Pattern) Issues {
 	var out Issues
 	key, ok := e.KeyFor(p.Index)
 	if !ok {
@@ -273,6 +338,17 @@ func checkPattern(e *schema.Entity, p *schema.Pattern) Issues {
 			Code: "DDB002", Pos: p.Pos,
 			Msg: fmt.Sprintf("pattern %s: entity %s declares no index %q", p.Name, e.Name, p.Index),
 		}}
+	}
+	if p.Index != "main" {
+		for _, ix := range t.Indexes {
+			if ix.Name == p.Index && ix.Projection == "keys_only" {
+				out = append(out, Issue{
+					Code: "DDB002", Pos: p.Pos,
+					Msg: fmt.Sprintf("pattern %s: GSI %s projects keys_only, so queried items carry no data attributes (and no entity-type attribute to filter on); typed pattern queries require projection=all",
+						p.Name, p.Index),
+				})
+			}
+		}
 	}
 	if !keytmpl.StructurallyEqual(p.PK, key.PK) {
 		out = append(out, Issue{
@@ -307,6 +383,14 @@ func checkPattern(e *schema.Entity, p *schema.Pattern) Issues {
 				Code: "DDB002", Pos: p.Pos,
 				Msg: fmt.Sprintf("pattern %s: sk.eq value %q must specify the complete sort key %q; keys shorter than the template are never written, so a prefix equality can never match (use sk.begins for prefixes)",
 					p.Name, p.SKValue.Raw, key.SK.Raw),
+			})
+		}
+	case schema.SKBegins:
+		if cut.Consumed == len(key.SK.Segments) && p.SKValue.TrailingDelim {
+			out = append(out, Issue{
+				Code: "DDB002", Pos: p.Pos,
+				Msg: fmt.Sprintf("pattern %s: sk.begins value %q covers the whole sort key %q and ends with the delimiter; keys never end with a delimiter, so the condition can never match (drop the trailing %q)",
+					p.Name, p.SKValue.Raw, key.SK.Raw, keytmpl.Delimiter),
 			})
 		}
 	case schema.SKGt, schema.SKGte, schema.SKLt, schema.SKLte:

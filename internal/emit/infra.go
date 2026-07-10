@@ -170,8 +170,29 @@ func CloudFormation(t *schema.Table) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// resourceName derives the CloudFormation logical ID, which must be
+// strictly alphanumeric: non-alphanumeric runes split words that are then
+// title-cased ("orders_v2" -> "OrdersV2Table").
 func resourceName(table string) string {
-	return strings.ToUpper(table[:1]) + table[1:] + "Table"
+	var b strings.Builder
+	up := true
+	for _, r := range table {
+		isAlnum := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'
+		if !isAlnum {
+			up = true
+			continue
+		}
+		if up && r >= 'a' && r <= 'z' {
+			r -= 'a' - 'A'
+		}
+		up = false
+		b.WriteRune(r)
+	}
+	name := b.String()
+	if name == "" || name[0] >= '0' && name[0] <= '9' {
+		name = "Ddb" + name
+	}
+	return name + "Table"
 }
 
 // Terraform renders the table as an aws_dynamodb_table resource.

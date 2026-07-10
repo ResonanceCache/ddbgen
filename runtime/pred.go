@@ -9,7 +9,9 @@ import (
 // strictly below the given one. Generated Before(...) methods use them to
 // build exclusive upper bounds out of DynamoDB's inclusive BETWEEN. The
 // boolean is false on underflow (nothing sorts below the value), which
-// callers turn into a provably empty range.
+// callers turn into a provably empty range. Above-range inputs also return
+// false, but generated code never reaches that: the paired Encode* call
+// fails first and surfaces the range error.
 
 // PredRFC3339 returns the encoding of t minus one nanosecond.
 func PredRFC3339(t time.Time) (string, bool) {

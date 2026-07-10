@@ -4,14 +4,38 @@
 // and no code paths outside what generated clients call.
 package runtime
 
-import "errors"
+import (
+	"context"
+	"errors"
+
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+)
+
+// DynamoDB is the subset of the DynamoDB client used by generated code and
+// the runtime helpers. *dynamodb.Client implements it; substitute a mock or
+// a wrapping implementation to test code that uses a generated client, per
+// the AWS SDK for Go v2 testing guidance.
+type DynamoDB interface {
+	GetItem(ctx context.Context, in *dynamodb.GetItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error)
+	PutItem(ctx context.Context, in *dynamodb.PutItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error)
+	DeleteItem(ctx context.Context, in *dynamodb.DeleteItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error)
+	UpdateItem(ctx context.Context, in *dynamodb.UpdateItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error)
+	Query(ctx context.Context, in *dynamodb.QueryInput, optFns ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error)
+	BatchGetItem(ctx context.Context, in *dynamodb.BatchGetItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.BatchGetItemOutput, error)
+	BatchWriteItem(ctx context.Context, in *dynamodb.BatchWriteItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.BatchWriteItemOutput, error)
+	TransactWriteItems(ctx context.Context, in *dynamodb.TransactWriteItemsInput, optFns ...func(*dynamodb.Options)) (*dynamodb.TransactWriteItemsOutput, error)
+}
 
 // Delimiter joins key template segments in physical key strings.
 const Delimiter = "#"
 
-// MaxKeySuffix sorts after every encoded key segment byte sequence. Range
-// bounds append it to make "after" and inclusive "between" cuts precise at
-// placeholder boundaries.
+// MaxKeySuffix sorts after every byte sequence the fixed-width encoders and
+// the delimiter can produce (their alphabets stay below U+FFFF's UTF-8
+// encoding, 0xEF 0xBF 0xBF). Range bounds append it to make "after" and
+// inclusive "between" cuts precise at placeholder boundaries. Raw string
+// segments containing supplementary-plane runes (four-byte UTF-8, e.g.
+// emoji) sort above it, but range bounds only ever abut fixed-width
+// encodings, never raw segments.
 const MaxKeySuffix = "\uffff"
 
 var (
@@ -26,7 +50,13 @@ var (
 	// ErrDelimiterInValue is returned when an encoded key segment contains
 	// the key delimiter. Use the urlenc encoder for delimiter-bearing values.
 	ErrDelimiterInValue = errors.New("ddbgen: value contains key delimiter")
-	// ErrUnprocessedRemain is returned when batch retries are exhausted and
-	// unprocessed items remain.
+	// ErrEmptySegment is returned when a key segment encodes to the empty
+	// string, which would produce a malformed physical key.
+	ErrEmptySegment = errors.New("ddbgen: key segment encodes to empty string")
+	// ErrUnprocessedRemain is returned (inside an *UnprocessedError) when
+	// batch retries are exhausted and unprocessed items remain.
 	ErrUnprocessedRemain = errors.New("ddbgen: unprocessed items remain after retries")
+	// ErrDuplicateKey is returned when a batch contains two operations on
+	// the same key, which DynamoDB rejects wholesale.
+	ErrDuplicateKey = errors.New("ddbgen: duplicate key in batch")
 )

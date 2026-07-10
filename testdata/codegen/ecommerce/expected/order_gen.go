@@ -108,8 +108,9 @@ func unmarshalOrder(av map[string]types.AttributeValue) (*Order, error) {
 }
 
 // GetOrder loads the Order identified by the given key fields.
-// It returns runtime.ErrNotFound when no such item exists.
-func (c *AppClient) GetOrder(ctx context.Context, tenantID string, createdAt time.Time, orderID string) (*Order, error) {
+// It returns runtime.ErrNotFound when no such item exists. Pass
+// runtime.WithConsistentRead() for a strongly consistent read.
+func (c *AppClient) GetOrder(ctx context.Context, tenantID string, createdAt time.Time, orderID string, opts ...runtime.ReadOpt) (*Order, error) {
 	pk, err := orderPK(tenantID)
 	if err != nil {
 		return nil, err
@@ -118,13 +119,17 @@ func (c *AppClient) GetOrder(ctx context.Context, tenantID string, createdAt tim
 	if err != nil {
 		return nil, err
 	}
-	out, err := c.ddb.GetItem(ctx, &dynamodb.GetItemInput{
+	input := &dynamodb.GetItemInput{
 		TableName: aws.String(c.table),
 		Key: map[string]types.AttributeValue{
 			"pk": &types.AttributeValueMemberS{Value: pk},
 			"sk": &types.AttributeValueMemberS{Value: sk},
 		},
-	})
+	}
+	if runtime.ResolveReadOpts(opts).ConsistentRead {
+		input.ConsistentRead = aws.Bool(true)
+	}
+	out, err := c.ddb.GetItem(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("GetOrder: %w", err)
 	}
@@ -202,8 +207,10 @@ func (c *AppClient) PutOrderIfNotExists(ctx context.Context, o *Order) error {
 }
 
 // DeleteOrder deletes the Order identified by the given key
-// fields. Deleting a missing item is not an error.
-func (c *AppClient) DeleteOrder(ctx context.Context, tenantID string, createdAt time.Time, orderID string) error {
+// fields. By default deleting a missing item is not an error; condition
+// the delete with runtime.WithMustExist() or
+// runtime.WithExpectVersion(v).
+func (c *AppClient) DeleteOrder(ctx context.Context, tenantID string, createdAt time.Time, orderID string, opts ...runtime.DeleteOpt) error {
 	pk, err := orderPK(tenantID)
 	if err != nil {
 		return err
@@ -212,13 +219,32 @@ func (c *AppClient) DeleteOrder(ctx context.Context, tenantID string, createdAt 
 	if err != nil {
 		return err
 	}
-	if _, err := c.ddb.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+	input := &dynamodb.DeleteItemInput{
 		TableName: aws.String(c.table),
 		Key: map[string]types.AttributeValue{
 			"pk": &types.AttributeValueMemberS{Value: pk},
 			"sk": &types.AttributeValueMemberS{Value: sk},
 		},
-	}); err != nil {
+	}
+	do := runtime.ResolveDeleteOpts(opts)
+	switch {
+	case do.ExpectVersion != nil:
+		input.ConditionExpression = aws.String("#v0 = :v0")
+		input.ExpressionAttributeNames = map[string]string{"#v0": "v"}
+		input.ExpressionAttributeValues = map[string]types.AttributeValue{
+			":v0": &types.AttributeValueMemberN{Value: strconv.FormatInt(*do.ExpectVersion, 10)},
+		}
+	case do.MustExist:
+		input.ConditionExpression = aws.String("attribute_exists(#p0)")
+		input.ExpressionAttributeNames = map[string]string{"#p0": "pk"}
+	}
+	if _, err := c.ddb.DeleteItem(ctx, input); err != nil {
+		if runtime.IsConditionalCheckFailed(err) {
+			if do.ExpectVersion != nil {
+				return fmt.Errorf("DeleteOrder: %w", runtime.ErrVersionConflict)
+			}
+			return fmt.Errorf("DeleteOrder: %w", runtime.ErrNotFound)
+		}
 		return fmt.Errorf("DeleteOrder: %w", err)
 	}
 	return nil
@@ -421,6 +447,7 @@ type OrdersByStatusQuery struct {
 	refined  bool
 	desc     bool
 	limit    int32
+	filter   *runtime.Filter
 	err      error
 }
 
@@ -509,12 +536,27 @@ func (q *OrdersByStatusQuery) Desc() *OrdersByStatusQuery {
 	return q
 }
 
-// Limit caps the number of items DynamoDB evaluates per page.
+// Limit caps the number of items DynamoDB evaluates per page (it is a page
+// size, not a result cap: All still streams every page).
 func (q *OrdersByStatusQuery) Limit(n int32) *OrdersByStatusQuery {
 	q.limit = n
 	return q
 }
 
+// Filter applies a raw server-side filter expression on non-key
+// attributes — the escape hatch for predicates the key condition cannot
+// express. Alias names and value bindings are merged with the ones the
+// query already uses; #pk, #sk, #ddbet, :pk, :a, :b, and :ddbet are
+// reserved. Filtering runs after the key condition, so filtered-out items
+// still consume read capacity.
+func (q *OrdersByStatusQuery) Filter(expression string, names map[string]string, values map[string]types.AttributeValue) *OrdersByStatusQuery {
+	q.filter = &runtime.Filter{Expression: expression, Names: names, Values: values}
+	return q
+}
+
+// spec resolves the query. The entity-type filter makes the typed result
+// exact whatever else shares the partition; the key condition keeps the
+// scanned range tight.
 func (q *OrdersByStatusQuery) spec() runtime.QuerySpec {
 	return runtime.QuerySpec{
 		Table:   q.c.table,
@@ -525,6 +567,9 @@ func (q *OrdersByStatusQuery) spec() runtime.QuerySpec {
 		SKCond:  q.cond,
 		Desc:    q.desc,
 		Limit:   q.limit,
+		ETAttr:  "_et",
+		ETValue: "order",
+		Filter:  q.filter,
 	}
 }
 
@@ -559,6 +604,7 @@ type OrdersByTenantQuery struct {
 	refined    bool
 	desc       bool
 	limit      int32
+	filter     *runtime.Filter
 	consistent bool
 	err        error
 }
@@ -650,9 +696,21 @@ func (q *OrdersByTenantQuery) Desc() *OrdersByTenantQuery {
 	return q
 }
 
-// Limit caps the number of items DynamoDB evaluates per page.
+// Limit caps the number of items DynamoDB evaluates per page (it is a page
+// size, not a result cap: All still streams every page).
 func (q *OrdersByTenantQuery) Limit(n int32) *OrdersByTenantQuery {
 	q.limit = n
+	return q
+}
+
+// Filter applies a raw server-side filter expression on non-key
+// attributes — the escape hatch for predicates the key condition cannot
+// express. Alias names and value bindings are merged with the ones the
+// query already uses; #pk, #sk, #ddbet, :pk, :a, :b, and :ddbet are
+// reserved. Filtering runs after the key condition, so filtered-out items
+// still consume read capacity.
+func (q *OrdersByTenantQuery) Filter(expression string, names map[string]string, values map[string]types.AttributeValue) *OrdersByTenantQuery {
+	q.filter = &runtime.Filter{Expression: expression, Names: names, Values: values}
 	return q
 }
 
@@ -662,6 +720,9 @@ func (q *OrdersByTenantQuery) ConsistentRead() *OrdersByTenantQuery {
 	return q
 }
 
+// spec resolves the query. The entity-type filter makes the typed result
+// exact whatever else shares the partition; the key condition keeps the
+// scanned range tight.
 func (q *OrdersByTenantQuery) spec() runtime.QuerySpec {
 	return runtime.QuerySpec{
 		Table:      q.c.table,
@@ -671,6 +732,9 @@ func (q *OrdersByTenantQuery) spec() runtime.QuerySpec {
 		SKCond:     q.cond,
 		Desc:       q.desc,
 		Limit:      q.limit,
+		ETAttr:     "_et",
+		ETValue:    "order",
+		Filter:     q.filter,
 		Consistent: q.consistent,
 	}
 }
@@ -697,10 +761,13 @@ func (q *OrdersByTenantQuery) Page(ctx context.Context, cursor runtime.Cursor) (
 }
 
 // BatchGetOrders loads Orders by key in chunks of
-// 100, retrying unprocessed keys with jittered backoff. Missing keys are
-// omitted from the result. On exhausted retries the fetched subset is
-// returned along with runtime.ErrUnprocessedRemain.
-func (c *AppClient) BatchGetOrders(ctx context.Context, keys []OrderKey) ([]Order, error) {
+// 100, retrying unprocessed keys with jittered backoff. Duplicate keys are
+// fetched once; missing keys are omitted from the result. On exhausted
+// retries the fetched subset is returned along with a
+// *runtime.UnprocessedError (errors.Is runtime.ErrUnprocessedRemain)
+// carrying the leftover keys. Pass runtime.WithConsistentRead() for
+// strongly consistent reads.
+func (c *AppClient) BatchGetOrders(ctx context.Context, keys []OrderKey, opts ...runtime.ReadOpt) ([]Order, error) {
 	kk := make([]map[string]types.AttributeValue, 0, len(keys))
 	for _, k := range keys {
 		pk, err := orderPK(k.TenantID)
@@ -716,7 +783,7 @@ func (c *AppClient) BatchGetOrders(ctx context.Context, keys []OrderKey) ([]Orde
 			"sk": &types.AttributeValueMemberS{Value: sk},
 		})
 	}
-	raw, err := runtime.BatchGet(ctx, c.ddb, c.table, kk)
+	raw, err := runtime.BatchGet(ctx, c.ddb, c.table, kk, runtime.ResolveReadOpts(opts).ConsistentRead)
 	out := make([]Order, 0, len(raw))
 	for _, av := range raw {
 		it, uerr := unmarshalOrder(av)
@@ -729,7 +796,9 @@ func (c *AppClient) BatchGetOrders(ctx context.Context, keys []OrderKey) ([]Orde
 }
 
 // BatchPutOrders writes items in chunks of 25, retrying
-// unprocessed writes with jittered backoff. Batch writes bypass
+// unprocessed writes with jittered backoff. Two items with the same key
+// return runtime.ErrDuplicateKey; on exhausted retries a
+// *runtime.UnprocessedError carries the leftover writes. Batch writes bypass
 // optimistic locking: items are written with their current Ver as-is.
 func (c *AppClient) BatchPutOrders(ctx context.Context, items []Order) error {
 	avs := make([]map[string]types.AttributeValue, 0, len(items))

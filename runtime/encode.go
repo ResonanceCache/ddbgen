@@ -13,8 +13,14 @@ import (
 // Anything narrower breaks lexicographic ordering of encoded keys.
 const rfc3339Layout = "2006-01-02T15:04:05.000000000Z"
 
-// CheckSegment rejects raw string segment values containing the delimiter.
+// CheckSegment rejects raw string segment values containing the delimiter
+// and empty values (an empty segment would produce a malformed key — and a
+// zero-valued index source would silently pollute the index with junk
+// entries; fail loudly instead).
 func CheckSegment(s string) (string, error) {
+	if s == "" {
+		return "", ErrEmptySegment
+	}
 	if strings.Contains(s, Delimiter) {
 		return "", fmt.Errorf("%w: %q", ErrDelimiterInValue, s)
 	}
@@ -104,6 +110,12 @@ func padInt(v int64, width int, name string) (string, error) {
 func unpadInt(s string, width int, name string) (int64, error) {
 	if len(s) != width {
 		return 0, fmt.Errorf("ddbgen: decoding %s key segment: want width %d, got %d", name, width, len(s))
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			// Sign characters parse, but the encoders never emit them.
+			return 0, fmt.Errorf("ddbgen: decoding %s key segment: %q is not zero-padded decimal", name, s)
+		}
 	}
 	v, err := strconv.ParseInt(s, 10, 64)
 	if err != nil {

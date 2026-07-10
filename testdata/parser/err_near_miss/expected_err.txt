@@ -1,0 +1,3 @@
+input.go:3:3: markers must start exactly with //ddb: (no space after //)
+	// ddb:entity table=app type=order
+	  ^

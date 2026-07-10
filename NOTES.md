@@ -38,15 +38,42 @@ rationale per judgment call, per the handoff spec.
   shared pk would scoop foreign entities that sort adjacent to the prefix
   (e.g. `PAY#...` sorts after `ORDER#...`). With an empty prefix the collision
   check already guarantees entity exclusivity and plain conditions are used.
-  Before(v)'s predecessor underflow (nothing below v) compiles to the provably
-  empty range `BETWEEN P AND P`.
+  Before(v)'s predecessor underflow (nothing below v) — like reversed Between
+  bounds — resolves to the explicit "empty" condition kind, which
+  short-circuits to zero items without a network call.
 - **Range methods are generated only for the first placeholder after the static
   prefix**, matching the spec's legal-cut list; deeper cuts require extending
   the pattern's sk condition.
-- **Pattern queries trust key bounds instead of filtering on the entity-type
-  attribute at read time**: DDB001 collision analysis plus two-sided bounds make
-  cross-entity leakage structurally impossible, and a runtime `_et` filter would
-  hide generator bugs rather than surface them.
+- **REVERSED (pre-release audit): pattern queries now add a server-side
+  entity-type filter** (`#et = :type` FilterExpression) on top of the key
+  bounds. The original decision ("trust key bounds, a runtime filter would hide
+  generator bugs") was proven wrong by the audit: legal, analyze-clean schemas
+  exist where bounds alone cannot express entity exclusivity — an sk template
+  with no leading literal sharing a partition, or hierarchical designs where
+  one entity's sort keys literally extend another's scope (adjacency lists).
+  Key bounds still do the performance work; the filter makes typed results
+  structurally exact. Caveat (documented in README): items written by other
+  tools without the entity-type attribute are invisible to pattern queries.
+- **begins prefixes are canonicalized to end at a delimiter.** A marker like
+  `sk.begins="ORDER"` (no trailing `#`) validated fine but generated bounds
+  against `"ORDER"` while real keys are `ORDER#...` — range refinements
+  matched nothing (After/Between) or everything (Before), silently. The
+  rendered prefix now always carries the delimiter when it stops short of the
+  full template. Caught in the audit; regression-tested by the bounds harness
+  (testdata/codegen/bounds), which runs generated queries against an in-memory
+  lexicographic model.
+- **Key segments that encode to the empty string are rejected at runtime**
+  (ErrEmptySegment). Previously a zero-valued GSI source silently produced
+  degenerate index entries like `STATUS#`. Loud failure until real sparse-GSI
+  support lands (roadmap).
+- **Generated clients accept the runtime.DynamoDB interface** (the 8 ops
+  generated code uses) instead of *dynamodb.Client, per AWS SDK v2 testing
+  guidance; runtime helpers take the same interface. This made the fake-driven
+  unit tests of pagination, batch retries, and the bounds harness possible.
+- **Batch duplicate policy**: BatchGet dedupes silently (idempotent);
+  BatchWrite errors with ErrDuplicateKey (dropping one of two conflicting
+  writes silently would be worse). Exhausted retries return *UnprocessedError
+  carrying the leftovers instead of a bare count.
 - **Partition queries are generated only for pk-template groups shared by two
   or more entities** (structural equality of literals + encoders, field names
   ignored). A single-entity "collection" is just that entity's pattern query.

@@ -15,14 +15,23 @@ import (
 // CfgClient is a typed client for the single-table design on table
 // "cfg".
 type CfgClient struct {
-	ddb   *dynamodb.Client
+	ddb   runtime.DynamoDB
 	table string
 }
 
-// NewCfgClient returns a client bound to the given table name.
-func NewCfgClient(ddb *dynamodb.Client, table string) *CfgClient {
+// NewCfgClient returns a client bound to the given table name. ddb is
+// usually *dynamodb.Client; any implementation of the runtime.DynamoDB
+// subset works, so tests can substitute a mock and middleware can wrap.
+func NewCfgClient(ddb runtime.DynamoDB, table string) *CfgClient {
 	return &CfgClient{ddb: ddb, table: table}
 }
+
+// DynamoDB returns the underlying client, the escape hatch for operations
+// the generated surface does not cover.
+func (c *CfgClient) DynamoDB() runtime.DynamoDB { return c.ddb }
+
+// TableName returns the physical table name the client is bound to.
+func (c *CfgClient) TableName() string { return c.table }
 
 // CfgItem is the sealed union of entity types stored in table
 // "cfg": Config.
@@ -41,7 +50,10 @@ func (c *CfgClient) TransactWrite(ctx context.Context, items ...types.TransactWr
 	})
 	if err != nil {
 		if runtime.IsTransactionConditionFailed(err) {
-			return fmt.Errorf("TransactWrite: %w", runtime.ErrConditionFailed)
+			// Both errors stay in the chain: match the sentinel with
+			// errors.Is, or errors.As the SDK exception for its
+			// CancellationReasons.
+			return fmt.Errorf("TransactWrite: %w: %w", runtime.ErrConditionFailed, err)
 		}
 		return fmt.Errorf("TransactWrite: %w", err)
 	}

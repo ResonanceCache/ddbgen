@@ -56,18 +56,23 @@ func unmarshalConfig(av map[string]types.AttributeValue) (*Config, error) {
 }
 
 // GetConfig loads the Config identified by the given key fields.
-// It returns runtime.ErrNotFound when no such item exists.
-func (c *CfgClient) GetConfig(ctx context.Context, name string) (*Config, error) {
+// It returns runtime.ErrNotFound when no such item exists. Pass
+// runtime.WithConsistentRead() for a strongly consistent read.
+func (c *CfgClient) GetConfig(ctx context.Context, name string, opts ...runtime.ReadOpt) (*Config, error) {
 	pk, err := configPK(name)
 	if err != nil {
 		return nil, err
 	}
-	out, err := c.ddb.GetItem(ctx, &dynamodb.GetItemInput{
+	input := &dynamodb.GetItemInput{
 		TableName: aws.String(c.table),
 		Key: map[string]types.AttributeValue{
 			"pk": &types.AttributeValueMemberS{Value: pk},
 		},
-	})
+	}
+	if runtime.ResolveReadOpts(opts).ConsistentRead {
+		input.ConsistentRead = aws.Bool(true)
+	}
+	out, err := c.ddb.GetItem(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("GetConfig: %w", err)
 	}
@@ -116,18 +121,32 @@ func (c *CfgClient) PutConfigIfNotExists(ctx context.Context, it *Config) error 
 }
 
 // DeleteConfig deletes the Config identified by the given key
-// fields. Deleting a missing item is not an error.
-func (c *CfgClient) DeleteConfig(ctx context.Context, name string) error {
+// fields. By default deleting a missing item is not an error; condition
+// the delete with runtime.WithMustExist().
+func (c *CfgClient) DeleteConfig(ctx context.Context, name string, opts ...runtime.DeleteOpt) error {
 	pk, err := configPK(name)
 	if err != nil {
 		return err
 	}
-	if _, err := c.ddb.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+	input := &dynamodb.DeleteItemInput{
 		TableName: aws.String(c.table),
 		Key: map[string]types.AttributeValue{
 			"pk": &types.AttributeValueMemberS{Value: pk},
 		},
-	}); err != nil {
+	}
+	do := runtime.ResolveDeleteOpts(opts)
+	if do.ExpectVersion != nil {
+		return fmt.Errorf("DeleteConfig: Config declares no version field; WithExpectVersion is not applicable")
+	}
+	switch {
+	case do.MustExist:
+		input.ConditionExpression = aws.String("attribute_exists(#p0)")
+		input.ExpressionAttributeNames = map[string]string{"#p0": "pk"}
+	}
+	if _, err := c.ddb.DeleteItem(ctx, input); err != nil {
+		if runtime.IsConditionalCheckFailed(err) {
+			return fmt.Errorf("DeleteConfig: %w", runtime.ErrNotFound)
+		}
 		return fmt.Errorf("DeleteConfig: %w", err)
 	}
 	return nil
@@ -214,10 +233,13 @@ func (u *ConfigUpdate) Run(ctx context.Context) (*Config, error) {
 }
 
 // BatchGetConfigs loads Configs by key in chunks of
-// 100, retrying unprocessed keys with jittered backoff. Missing keys are
-// omitted from the result. On exhausted retries the fetched subset is
-// returned along with runtime.ErrUnprocessedRemain.
-func (c *CfgClient) BatchGetConfigs(ctx context.Context, keys []ConfigKey) ([]Config, error) {
+// 100, retrying unprocessed keys with jittered backoff. Duplicate keys are
+// fetched once; missing keys are omitted from the result. On exhausted
+// retries the fetched subset is returned along with a
+// *runtime.UnprocessedError (errors.Is runtime.ErrUnprocessedRemain)
+// carrying the leftover keys. Pass runtime.WithConsistentRead() for
+// strongly consistent reads.
+func (c *CfgClient) BatchGetConfigs(ctx context.Context, keys []ConfigKey, opts ...runtime.ReadOpt) ([]Config, error) {
 	kk := make([]map[string]types.AttributeValue, 0, len(keys))
 	for _, k := range keys {
 		pk, err := configPK(k.Name)
@@ -228,7 +250,7 @@ func (c *CfgClient) BatchGetConfigs(ctx context.Context, keys []ConfigKey) ([]Co
 			"pk": &types.AttributeValueMemberS{Value: pk},
 		})
 	}
-	raw, err := runtime.BatchGet(ctx, c.ddb, c.table, kk)
+	raw, err := runtime.BatchGet(ctx, c.ddb, c.table, kk, runtime.ResolveReadOpts(opts).ConsistentRead)
 	out := make([]Config, 0, len(raw))
 	for _, av := range raw {
 		it, uerr := unmarshalConfig(av)
@@ -241,7 +263,9 @@ func (c *CfgClient) BatchGetConfigs(ctx context.Context, keys []ConfigKey) ([]Co
 }
 
 // BatchPutConfigs writes items in chunks of 25, retrying
-// unprocessed writes with jittered backoff.
+// unprocessed writes with jittered backoff. Two items with the same key
+// return runtime.ErrDuplicateKey; on exhausted retries a
+// *runtime.UnprocessedError carries the leftover writes.
 func (c *CfgClient) BatchPutConfigs(ctx context.Context, items []Config) error {
 	avs := make([]map[string]types.AttributeValue, 0, len(items))
 	for i := range items {

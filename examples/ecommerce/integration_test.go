@@ -11,6 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+
 	"github.com/ResonanceCache/ddbgen/runtime"
 )
 
@@ -32,7 +36,27 @@ func newTestClient(t *testing.T) *AppClient {
 	if err := createAppTable(ctx, ddb, table); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		_, _ = ddb.DeleteTable(context.Background(), &dynamodb.DeleteTableInput{TableName: aws.String(table)})
+	})
 	return NewAppClient(ddb, table)
+}
+
+// eventually retries an assertion briefly: GSI propagation is synchronous
+// on DynamoDB Local but eventually consistent on real endpoints.
+func eventually(t *testing.T, check func() error) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		err := check()
+		if err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 var itT0 = time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC)
@@ -61,9 +85,16 @@ func TestCRUDAndVersioning(t *testing.T) {
 	if o.Ver != 1 {
 		t.Fatalf("PutOrderIfNotExists must set version 1, got %d", o.Ver)
 	}
-	dup := &Order{TenantID: "acme", OrderID: "o1", CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt}
+	dup := &Order{TenantID: "acme", OrderID: "o1", Status: "open", CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt}
 	if err := app.PutOrderIfNotExists(ctx, dup); !errors.Is(err, runtime.ErrConditionFailed) {
 		t.Fatalf("duplicate PutIfNotExists: want ErrConditionFailed, got %v", err)
+	}
+
+	// A zero-valued index source fails loudly instead of writing junk
+	// index entries (sparse GSIs are a roadmap item).
+	empty := &Order{TenantID: "acme", OrderID: "zz", CreatedAt: o.CreatedAt.Add(time.Minute), UpdatedAt: o.UpdatedAt}
+	if err := app.PutOrder(ctx, empty); !errors.Is(err, runtime.ErrEmptySegment) {
+		t.Fatalf("empty Status must be rejected, got %v", err)
 	}
 
 	got, err := app.GetOrder(ctx, "acme", o.CreatedAt, "o1")
@@ -110,25 +141,53 @@ func TestCRUDAndVersioning(t *testing.T) {
 		t.Fatalf("update missing: want ErrNotFound, got %v", err)
 	}
 
-	// The status setter resynced GSI1: the GSI pattern must find the item.
-	found := 0
-	for o, err := range app.OrdersByStatus("shipped").All(ctx) {
-		if err != nil {
-			t.Fatal(err)
+	// The status setter resynced GSI1: the GSI pattern must find the item
+	// (retried briefly for real endpoints' eventual consistency).
+	eventually(t, func() error {
+		found := 0
+		for o, err := range app.OrdersByStatus("shipped").All(ctx) {
+			if err != nil {
+				return err
+			}
+			if o.OrderID == "o1" {
+				found++
+			}
 		}
-		if o.OrderID == "o1" {
-			found++
+		if found != 1 {
+			return fmt.Errorf("OrdersByStatus after SetStatus: found %d", found)
 		}
+		return nil
+	})
+
+	// Remove-only update: the attribute disappears, the version advances.
+	if _, err := app.UpdateOrder("acme", o.CreatedAt, "o1").SetNote("temp").Run(ctx); err != nil {
+		t.Fatal(err)
 	}
-	if found != 1 {
-		t.Fatalf("OrdersByStatus after SetStatus: found %d", found)
+	removed, err := app.UpdateOrder("acme", o.CreatedAt, "o1").RemoveNote().Run(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed.Note != "" || removed.Ver != 5 {
+		t.Fatalf("remove-only update: %+v", removed)
 	}
 
-	if err := app.DeleteOrder(ctx, "acme", o.CreatedAt, "o1"); err != nil {
+	// Strongly consistent read round-trip.
+	if got, err := app.GetOrder(ctx, "acme", o.CreatedAt, "o1", runtime.WithConsistentRead()); err != nil || got.Ver != 5 {
+		t.Fatalf("consistent GetOrder: %+v, %v", got, err)
+	}
+
+	// Conditional deletes.
+	if err := app.DeleteOrder(ctx, "acme", o.CreatedAt, "o1", runtime.WithExpectVersion(4)); !errors.Is(err, runtime.ErrVersionConflict) {
+		t.Fatalf("stale conditional delete: want ErrVersionConflict, got %v", err)
+	}
+	if err := app.DeleteOrder(ctx, "acme", o.CreatedAt, "o1", runtime.WithExpectVersion(5)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := app.GetOrder(ctx, "acme", o.CreatedAt, "o1"); !errors.Is(err, runtime.ErrNotFound) {
 		t.Fatalf("after delete: want ErrNotFound, got %v", err)
+	}
+	if err := app.DeleteOrder(ctx, "acme", o.CreatedAt, "o1", runtime.WithMustExist()); !errors.Is(err, runtime.ErrNotFound) {
+		t.Fatalf("must-exist delete of missing item: want ErrNotFound, got %v", err)
 	}
 }
 
@@ -212,6 +271,22 @@ func TestPatternQueriesAndPagination(t *testing.T) {
 	}
 	if items != 5 || pages < 3 {
 		t.Fatalf("Page: %d items across %d pages", items, pages)
+	}
+
+	// Raw filter escape hatch composes with the entity-type filter.
+	var filtered []string
+	for o, err := range app.OrdersByTenant("acme").Filter(
+		"#s = :s",
+		map[string]string{"#s": "status"},
+		map[string]types.AttributeValue{":s": &types.AttributeValueMemberS{Value: "open"}},
+	).All(ctx) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		filtered = append(filtered, o.OrderID)
+	}
+	if len(filtered) != 5 {
+		t.Fatalf("filter on status=open: got %v", filtered)
 	}
 }
 

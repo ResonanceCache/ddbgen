@@ -1,0 +1,4 @@
+input.go:3: DDB008: entity Order: field Legacy maps to attribute "pk", which is the physical partition-key attribute; the synthesized value would silently overwrite the field on every write — pick another dynamodbav name
+input.go:3: DDB008: entity Order: field Shadow maps to attribute "gsi1sk", which is the physical sort-key attribute of GSI GSI1; the synthesized value would silently overwrite the field on every write — pick another dynamodbav name
+input.go:3: DDB008: entity Order: field Tag maps to attribute "_et", which is the entity-type attribute; the synthesized value would silently overwrite the field on every write — pick another dynamodbav name
+input.go:3: DDB008: entity Order: fields Kind and Alias both map to attribute "kind"; one write would silently win

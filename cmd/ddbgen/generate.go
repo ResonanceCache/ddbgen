@@ -2,11 +2,7 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
 
-	"github.com/ResonanceCache/ddbgen/internal/codegen"
 	"github.com/ResonanceCache/ddbgen/internal/schema"
 	"github.com/spf13/cobra"
 )
@@ -79,24 +75,4 @@ the same parse as the generated code.`,
 			return runDocs(args, cmd)
 		},
 	}
-}
-
-// generateInto renders and writes all generated files for one directory.
-func generateInto(dir string, sub *schema.Schema, stdout printer) error {
-	files, err := codegen.Generate(sub)
-	if err != nil {
-		return err
-	}
-	names := make([]string, 0, len(files))
-	for name := range files {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		if err := os.WriteFile(filepath.Join(dir, name), files[name], 0o644); err != nil {
-			return err
-		}
-		stdout.Printf("%s: wrote %s\n", dir, name)
-	}
-	return nil
 }

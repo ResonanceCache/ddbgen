@@ -43,6 +43,11 @@ func Load(patterns ...string) (*schema.Schema, error) {
 	var entities []*schema.Entity
 	for _, pkg := range pkgs {
 		for _, perr := range pkg.Errors {
+			// A syntax-broken *_gen.go must not brick regeneration: those
+			// files are ddbgen's own output and are about to be rewritten.
+			if file, _, ok := strings.Cut(perr.Pos, ":"); ok && strings.HasSuffix(file, "_gen.go") {
+				continue
+			}
 			return nil, fmt.Errorf("loading %s: %s", pkg.PkgPath, perr)
 		}
 		for _, f := range pkg.Syntax {
@@ -84,6 +89,15 @@ func entitiesFromFile(fset *token.FileSet, f *ast.File, pkgName, dir string) ([]
 		if !ok || gd.Tok != token.TYPE {
 			continue
 		}
+		if len(gd.Specs) > 1 && gd.Doc != nil {
+			markers, err := collectMarkers(fset, gd.Doc)
+			if err != nil {
+				return nil, err
+			}
+			if len(markers) > 0 {
+				return nil, markers[0].errAt(0, "//ddb: markers on a grouped type declaration are ambiguous; move them onto the specific type inside the group")
+			}
+		}
 		for _, spec := range gd.Specs {
 			ts, ok := spec.(*ast.TypeSpec)
 			if !ok {
@@ -107,6 +121,9 @@ func entitiesFromFile(fset *token.FileSet, f *ast.File, pkgName, dir string) ([]
 			if !ok {
 				return nil, markers[0].errAt(0, "//ddb: markers must annotate a struct type; %s is not a struct", ts.Name.Name)
 			}
+			if ts.TypeParams != nil {
+				return nil, markers[0].errAt(0, "//ddb: markers are not supported on generic types; %s has type parameters", ts.Name.Name)
+			}
 			ent, err := buildEntity(ts.Name.Name, st, markers, pkgName, dir)
 			if err != nil {
 				return nil, err
@@ -117,10 +134,22 @@ func entitiesFromFile(fset *token.FileSet, f *ast.File, pkgName, dir string) ([]
 	return out, nil
 }
 
+var nearMissRe = regexp.MustCompile(`^//\s+ddb:`)
+
 func collectMarkers(fset *token.FileSet, doc *ast.CommentGroup) ([]*marker, error) {
 	var out []*marker
 	for _, c := range doc.List {
 		if !strings.HasPrefix(c.Text, markerPrefix) {
+			pos := fset.Position(c.Slash)
+			// Near-misses are silently-ignored footguns; fail loudly.
+			if nearMissRe.MatchString(c.Text) {
+				m := &marker{text: c.Text, file: pos.Filename, line: pos.Line, col: pos.Column}
+				return nil, m.errAt(2, "markers must start exactly with //ddb: (no space after //)")
+			}
+			if strings.HasPrefix(c.Text, "/*") && strings.Contains(c.Text, "//ddb:") {
+				m := &marker{text: "", file: pos.Filename, line: pos.Line, col: pos.Column}
+				return nil, m.errAt(0, "//ddb: markers inside /* */ block comments are not recognized; use line comments")
+			}
 			continue
 		}
 		pos := fset.Position(c.Slash)

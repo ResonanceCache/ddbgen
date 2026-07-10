@@ -15,14 +15,23 @@ import (
 // AppClient is a typed client for the single-table design on table
 // "app".
 type AppClient struct {
-	ddb   *dynamodb.Client
+	ddb   runtime.DynamoDB
 	table string
 }
 
-// NewAppClient returns a client bound to the given table name.
-func NewAppClient(ddb *dynamodb.Client, table string) *AppClient {
+// NewAppClient returns a client bound to the given table name. ddb is
+// usually *dynamodb.Client; any implementation of the runtime.DynamoDB
+// subset works, so tests can substitute a mock and middleware can wrap.
+func NewAppClient(ddb runtime.DynamoDB, table string) *AppClient {
 	return &AppClient{ddb: ddb, table: table}
 }
+
+// DynamoDB returns the underlying client, the escape hatch for operations
+// the generated surface does not cover.
+func (c *AppClient) DynamoDB() runtime.DynamoDB { return c.ddb }
+
+// TableName returns the physical table name the client is bound to.
+func (c *AppClient) TableName() string { return c.table }
 
 // AppItem is the sealed union of entity types stored in table
 // "app": Order, Payment, Tenant.
@@ -41,7 +50,10 @@ func (c *AppClient) TransactWrite(ctx context.Context, items ...types.TransactWr
 	})
 	if err != nil {
 		if runtime.IsTransactionConditionFailed(err) {
-			return fmt.Errorf("TransactWrite: %w", runtime.ErrConditionFailed)
+			// Both errors stay in the chain: match the sentinel with
+			// errors.Is, or errors.As the SDK exception for its
+			// CancellationReasons.
+			return fmt.Errorf("TransactWrite: %w: %w", runtime.ErrConditionFailed, err)
 		}
 		return fmt.Errorf("TransactWrite: %w", err)
 	}

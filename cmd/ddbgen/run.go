@@ -5,8 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/ResonanceCache/ddbgen/internal/analyze"
+	"github.com/ResonanceCache/ddbgen/internal/codegen"
 	"github.com/ResonanceCache/ddbgen/internal/emit"
 	"github.com/ResonanceCache/ddbgen/internal/parser"
 	"github.com/ResonanceCache/ddbgen/internal/schema"
@@ -66,7 +68,12 @@ func runGenerate(args []string, force bool, stdout printer) error {
 	if err != nil {
 		return err
 	}
-	for _, dir := range sortedDirs(byDir) {
+	// Two phases: validate and render everything first, then write. A
+	// failure in one package must not leave earlier packages regenerated
+	// with advanced snapshots.
+	dirs := sortedDirs(byDir)
+	rendered := make(map[string]map[string][]byte, len(dirs))
+	for _, dir := range dirs {
 		sub := byDir[dir]
 		report, err := checkSnapshot(dir, sub)
 		if err != nil {
@@ -78,13 +85,58 @@ func runGenerate(args []string, force bool, stdout printer) error {
 				return fmt.Errorf("breaking schema changes detected in %s (rerun with --force to accept)", dir)
 			}
 		}
-		if err := generateInto(dir, sub, stdout); err != nil {
+		files, err := codegen.Generate(sub)
+		if err != nil {
 			return err
 		}
-		if err := schema.WriteSnapshot(filepath.Join(dir, schema.SnapshotName), sub); err != nil {
+		rendered[dir] = files
+	}
+	for _, dir := range dirs {
+		if err := writeGenerated(dir, rendered[dir], stdout); err != nil {
+			return err
+		}
+		if err := schema.WriteSnapshot(filepath.Join(dir, schema.SnapshotName), byDir[dir]); err != nil {
 			return err
 		}
 		stdout.Printf("%s: wrote %s\n", dir, schema.SnapshotName)
+	}
+	return nil
+}
+
+// writeGenerated writes the rendered files and removes stale *_gen.go
+// files from earlier runs (identified by the generated-code header), so a
+// renamed or removed entity cannot leave an uncompilable orphan behind.
+func writeGenerated(dir string, files map[string][]byte, stdout printer) error {
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(dir, name), files[name], 0o644); err != nil {
+			return err
+		}
+		stdout.Printf("%s: wrote %s\n", dir, name)
+	}
+	existing, err := filepath.Glob(filepath.Join(dir, "*_gen.go"))
+	if err != nil {
+		return err
+	}
+	for _, path := range existing {
+		if _, current := files[filepath.Base(path)]; current {
+			continue
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if !strings.HasPrefix(string(content), codegen.Header) {
+			continue // not ours; leave it alone
+		}
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+		stdout.Printf("%s: removed stale %s\n", dir, filepath.Base(path))
 	}
 	return nil
 }

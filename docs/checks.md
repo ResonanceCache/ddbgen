@@ -35,10 +35,19 @@ written:
 - sort-key conditions must align to a placeholder boundary of that index's
   sk template — `sk.begins="ORD"` is rejected because it cuts mid-literal,
   and a begins value ending inside a variable-width placeholder is rejected
-  because it could match part of a value;
+  because it could match part of a value. (A begins value that stops at a
+  segment boundary without writing the trailing `#` — `sk.begins="ORDER"` —
+  is accepted and canonicalized: the generated prefix always carries the
+  delimiter, so range cuts and sibling literals like `ORDERX` behave
+  correctly.);
 - `sk.eq` must spell out the complete sort key (shorter keys are never
-  written; use `sk.begins` for prefixes);
-- valued `sk.gt/gte/lt/lte` must end with a placeholder — the range bound.
+  written; use `sk.begins` for prefixes), and a `sk.begins` value that
+  covers the whole sort key must not end with the delimiter (keys never
+  end with one, so it could never match);
+- valued `sk.gt/gte/lt/lte` must end with a placeholder — the range bound;
+- patterns may not target `projection=keys_only` GSIs: the projected items
+  carry no data attributes and no entity-type attribute, so a typed query
+  would return zero-valued structs.
 
 ## DDB003 — sortability
 
@@ -73,7 +82,10 @@ Each encoder accepts specific Go field types:
 
 `version=` must name an exported, marshaled integer field (`int`, `int32`,
 `int64`). `ttl=` must name an `int64` field holding unix seconds, because
-that is what DynamoDB's TTL expects.
+that is what DynamoDB's TTL expects. Neither field may appear as a key
+template placeholder: the version changes on every update without
+recomputing keys (the index would silently drift), and TTL values change
+over an item's life.
 
 ## DDB006 — duplicate names
 
@@ -86,3 +98,12 @@ must be unique per table (generated method names would collide).
 Every `{Field}` in every key template must resolve to an exported struct
 field that participates in marshaling. Unexported fields and fields tagged
 `dynamodbav:"-"` cannot feed keys.
+
+## DDB008 — reserved attribute names
+
+Field attribute names must not collide with the synthesized physical key
+attributes (`pk`, `sk`, `gsi1pk`, …) or the entity-type attribute
+(`_et` or the `et=` override): marshal injects those after `MarshalMap`,
+so a colliding field would be silently overwritten on every write and
+corrupted on every read. Two fields of one entity mapping to the same
+attribute name are rejected for the same reason.

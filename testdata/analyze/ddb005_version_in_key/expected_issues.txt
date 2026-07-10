@@ -1,0 +1,2 @@
+input.go:4: DDB005: entity Doc: version field Rev is a placeholder in the sk template; every Update increments the version without recomputing keys, so the key would silently diverge from the data
+input.go:5: DDB005: entity Doc: ttl field Expiry is a placeholder in the GSI1 pk template; TTL fields change over an item's life and must not feed keys

@@ -13,12 +13,17 @@ import (
 // SKCond is a resolved sort-key condition. Constructors below encode the
 // range-cut semantics documented in the generator: in shared partitions
 // every range is two-sided (BETWEEN) so items of foreign entities that sort
-// adjacent to the scope prefix can never leak into results.
+// adjacent to the scope prefix stay outside the scanned range. The kind
+// "empty" marks a provably empty range; queries with it return no items
+// without a network call.
 type SKCond struct {
-	Kind string // "", "eq", "begins", "lt", "lte", "gt", "gte", "between"
+	Kind string // "", "eq", "begins", "lt", "lte", "gt", "gte", "between", "empty"
 	Lo   string
 	Hi   string
 }
+
+// SKEmpty matches nothing: the query short-circuits to zero items.
+func SKEmpty() SKCond { return SKCond{Kind: "empty"} }
 
 // SKEq matches sk exactly.
 func SKEq(v string) SKCond { return SKCond{Kind: "eq", Lo: v} }
@@ -27,8 +32,8 @@ func SKEq(v string) SKCond { return SKCond{Kind: "eq", Lo: v} }
 func SKBegins(prefix string) SKCond { return SKCond{Kind: "begins", Lo: prefix} }
 
 // SKAfter matches keys strictly after the encoded value and all of its
-// continuations. scope is the entity's leading-literal sk prefix ("" when
-// the entity provably owns the partition alone).
+// continuations. scope is the entity's static sk prefix ("" when the sk
+// template starts with a placeholder).
 func SKAfter(scope, v string) SKCond {
 	lo := v + MaxKeySuffix
 	if scope == "" {
@@ -36,7 +41,7 @@ func SKAfter(scope, v string) SKCond {
 	}
 	hi := scope + MaxKeySuffix
 	if lo > hi {
-		return SKCond{Kind: "between", Lo: scope, Hi: scope} // provably empty
+		return SKEmpty()
 	}
 	return SKCond{Kind: "between", Lo: lo, Hi: hi}
 }
@@ -49,21 +54,20 @@ func SKOnOrAfter(scope, v string) SKCond {
 	}
 	hi := scope + MaxKeySuffix
 	if v > hi {
-		return SKCond{Kind: "between", Lo: scope, Hi: scope}
+		return SKEmpty()
 	}
 	return SKCond{Kind: "between", Lo: v, Hi: hi}
 }
 
 // SKBefore matches keys strictly before the encoded value. pred is the
 // encoding of the value's predecessor (see the Pred* functions); predOK
-// false means nothing sorts below the value and the range is provably
-// empty within the scope.
+// false means nothing sorts below the value within the scope.
 func SKBefore(scope, v, pred string, predOK bool) SKCond {
 	if scope == "" {
 		return SKCond{Kind: "lt", Lo: v}
 	}
 	if !predOK {
-		return SKCond{Kind: "between", Lo: scope, Hi: scope}
+		return SKEmpty()
 	}
 	return SKCond{Kind: "between", Lo: scope, Hi: pred + MaxKeySuffix}
 }
@@ -78,9 +82,24 @@ func SKOnOrBefore(scope, v string) SKCond {
 }
 
 // SKBetween matches keys from lo through hi inclusive, including hi's
-// continuations.
+// continuations. Reversed bounds yield a provably empty range rather than
+// a DynamoDB validation error.
 func SKBetween(lo, hi string) SKCond {
+	if lo > hi {
+		return SKEmpty()
+	}
 	return SKCond{Kind: "between", Lo: lo, Hi: hi + MaxKeySuffix}
+}
+
+// Filter is an optional raw filter expression applied server-side after
+// the key condition. It is the escape hatch for non-key predicates;
+// attribute names and values must use expression aliases, which are merged
+// with the aliases the generated query already uses (#pk, #sk, #ddbet,
+// :pk, :a, :b, :ddbet are reserved).
+type Filter struct {
+	Expression string
+	Names      map[string]string
+	Values     map[string]types.AttributeValue
 }
 
 // QuerySpec describes one generated query.
@@ -94,6 +113,13 @@ type QuerySpec struct {
 	Desc       bool
 	Limit      int32
 	Consistent bool
+
+	// ETAttr/ETValue add a server-side entity-type filter so a typed query
+	// can never yield foreign entities, whatever shares the partition.
+	ETAttr  string
+	ETValue string
+
+	Filter *Filter
 }
 
 // BuildQueryInput assembles the QueryInput with fully aliased attribute
@@ -125,12 +151,34 @@ func BuildQueryInput(s QuerySpec) *dynamodb.QueryInput {
 			cond += " AND #sk BETWEEN :a AND :b"
 		}
 	}
+	var filter string
+	if s.ETAttr != "" {
+		names["#ddbet"] = s.ETAttr
+		values[":ddbet"] = &types.AttributeValueMemberS{Value: s.ETValue}
+		filter = "#ddbet = :ddbet"
+	}
+	if s.Filter != nil && s.Filter.Expression != "" {
+		if filter != "" {
+			filter += " AND (" + s.Filter.Expression + ")"
+		} else {
+			filter = s.Filter.Expression
+		}
+		for k, v := range s.Filter.Names {
+			names[k] = v
+		}
+		for k, v := range s.Filter.Values {
+			values[k] = v
+		}
+	}
 	input := &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		KeyConditionExpression:    aws.String(cond),
 		ExpressionAttributeNames:  names,
 		ExpressionAttributeValues: values,
 		ScanIndexForward:          aws.Bool(!s.Desc),
+	}
+	if filter != "" {
+		input.FilterExpression = aws.String(filter)
 	}
 	if s.Index != "" {
 		input.IndexName = aws.String(s.Index)
@@ -145,7 +193,10 @@ func BuildQueryInput(s QuerySpec) *dynamodb.QueryInput {
 }
 
 // QueryPageRaw runs a single page query from the given cursor.
-func QueryPageRaw(ctx context.Context, ddb *dynamodb.Client, s QuerySpec, cursor Cursor) ([]map[string]types.AttributeValue, Cursor, error) {
+func QueryPageRaw(ctx context.Context, ddb DynamoDB, s QuerySpec, cursor Cursor) ([]map[string]types.AttributeValue, Cursor, error) {
+	if s.SKCond.Kind == "empty" {
+		return nil, "", nil
+	}
 	input := BuildQueryInput(s)
 	esk, err := cursor.Decode()
 	if err != nil {
@@ -164,7 +215,7 @@ func QueryPageRaw(ctx context.Context, ddb *dynamodb.Client, s QuerySpec, cursor
 }
 
 // QueryPage runs a single page query and unmarshals the items.
-func QueryPage[T any](ctx context.Context, ddb *dynamodb.Client, s QuerySpec, cursor Cursor, unmarshal func(map[string]types.AttributeValue) (*T, error)) ([]T, Cursor, error) {
+func QueryPage[T any](ctx context.Context, ddb DynamoDB, s QuerySpec, cursor Cursor, unmarshal func(map[string]types.AttributeValue) (*T, error)) ([]T, Cursor, error) {
 	raw, next, err := QueryPageRaw(ctx, ddb, s, cursor)
 	if err != nil {
 		return nil, "", err
@@ -182,7 +233,7 @@ func QueryPage[T any](ctx context.Context, ddb *dynamodb.Client, s QuerySpec, cu
 
 // QueryAllRaw streams every matching item, paginating internally.
 // Iteration stops after yielding the first error.
-func QueryAllRaw(ctx context.Context, ddb *dynamodb.Client, s QuerySpec) iter.Seq2[map[string]types.AttributeValue, error] {
+func QueryAllRaw(ctx context.Context, ddb DynamoDB, s QuerySpec) iter.Seq2[map[string]types.AttributeValue, error] {
 	return func(yield func(map[string]types.AttributeValue, error) bool) {
 		var cursor Cursor
 		for {
@@ -205,7 +256,7 @@ func QueryAllRaw(ctx context.Context, ddb *dynamodb.Client, s QuerySpec) iter.Se
 }
 
 // QueryAll streams every matching item as a typed value.
-func QueryAll[T any](ctx context.Context, ddb *dynamodb.Client, s QuerySpec, unmarshal func(map[string]types.AttributeValue) (*T, error)) iter.Seq2[T, error] {
+func QueryAll[T any](ctx context.Context, ddb DynamoDB, s QuerySpec, unmarshal func(map[string]types.AttributeValue) (*T, error)) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		var zero T
 		for av, err := range QueryAllRaw(ctx, ddb, s) {

@@ -70,8 +70,9 @@ func unmarshalTenant(av map[string]types.AttributeValue) (*Tenant, error) {
 }
 
 // GetTenant loads the Tenant identified by the given key fields.
-// It returns runtime.ErrNotFound when no such item exists.
-func (c *AppClient) GetTenant(ctx context.Context, tenantID string) (*Tenant, error) {
+// It returns runtime.ErrNotFound when no such item exists. Pass
+// runtime.WithConsistentRead() for a strongly consistent read.
+func (c *AppClient) GetTenant(ctx context.Context, tenantID string, opts ...runtime.ReadOpt) (*Tenant, error) {
 	pk, err := tenantPK(tenantID)
 	if err != nil {
 		return nil, err
@@ -80,13 +81,17 @@ func (c *AppClient) GetTenant(ctx context.Context, tenantID string) (*Tenant, er
 	if err != nil {
 		return nil, err
 	}
-	out, err := c.ddb.GetItem(ctx, &dynamodb.GetItemInput{
+	input := &dynamodb.GetItemInput{
 		TableName: aws.String(c.table),
 		Key: map[string]types.AttributeValue{
 			"pk": &types.AttributeValueMemberS{Value: pk},
 			"sk": &types.AttributeValueMemberS{Value: sk},
 		},
-	})
+	}
+	if runtime.ResolveReadOpts(opts).ConsistentRead {
+		input.ConsistentRead = aws.Bool(true)
+	}
+	out, err := c.ddb.GetItem(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("GetTenant: %w", err)
 	}
@@ -136,8 +141,9 @@ func (c *AppClient) PutTenantIfNotExists(ctx context.Context, t *Tenant) error {
 }
 
 // DeleteTenant deletes the Tenant identified by the given key
-// fields. Deleting a missing item is not an error.
-func (c *AppClient) DeleteTenant(ctx context.Context, tenantID string) error {
+// fields. By default deleting a missing item is not an error; condition
+// the delete with runtime.WithMustExist().
+func (c *AppClient) DeleteTenant(ctx context.Context, tenantID string, opts ...runtime.DeleteOpt) error {
 	pk, err := tenantPK(tenantID)
 	if err != nil {
 		return err
@@ -146,13 +152,26 @@ func (c *AppClient) DeleteTenant(ctx context.Context, tenantID string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := c.ddb.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+	input := &dynamodb.DeleteItemInput{
 		TableName: aws.String(c.table),
 		Key: map[string]types.AttributeValue{
 			"pk": &types.AttributeValueMemberS{Value: pk},
 			"sk": &types.AttributeValueMemberS{Value: sk},
 		},
-	}); err != nil {
+	}
+	do := runtime.ResolveDeleteOpts(opts)
+	if do.ExpectVersion != nil {
+		return fmt.Errorf("DeleteTenant: Tenant declares no version field; WithExpectVersion is not applicable")
+	}
+	switch {
+	case do.MustExist:
+		input.ConditionExpression = aws.String("attribute_exists(#p0)")
+		input.ExpressionAttributeNames = map[string]string{"#p0": "pk"}
+	}
+	if _, err := c.ddb.DeleteItem(ctx, input); err != nil {
+		if runtime.IsConditionalCheckFailed(err) {
+			return fmt.Errorf("DeleteTenant: %w", runtime.ErrNotFound)
+		}
 		return fmt.Errorf("DeleteTenant: %w", err)
 	}
 	return nil
@@ -268,10 +287,13 @@ func (u *TenantUpdate) Run(ctx context.Context) (*Tenant, error) {
 }
 
 // BatchGetTenants loads Tenants by key in chunks of
-// 100, retrying unprocessed keys with jittered backoff. Missing keys are
-// omitted from the result. On exhausted retries the fetched subset is
-// returned along with runtime.ErrUnprocessedRemain.
-func (c *AppClient) BatchGetTenants(ctx context.Context, keys []TenantKey) ([]Tenant, error) {
+// 100, retrying unprocessed keys with jittered backoff. Duplicate keys are
+// fetched once; missing keys are omitted from the result. On exhausted
+// retries the fetched subset is returned along with a
+// *runtime.UnprocessedError (errors.Is runtime.ErrUnprocessedRemain)
+// carrying the leftover keys. Pass runtime.WithConsistentRead() for
+// strongly consistent reads.
+func (c *AppClient) BatchGetTenants(ctx context.Context, keys []TenantKey, opts ...runtime.ReadOpt) ([]Tenant, error) {
 	kk := make([]map[string]types.AttributeValue, 0, len(keys))
 	for _, k := range keys {
 		pk, err := tenantPK(k.TenantID)
@@ -287,7 +309,7 @@ func (c *AppClient) BatchGetTenants(ctx context.Context, keys []TenantKey) ([]Te
 			"sk": &types.AttributeValueMemberS{Value: sk},
 		})
 	}
-	raw, err := runtime.BatchGet(ctx, c.ddb, c.table, kk)
+	raw, err := runtime.BatchGet(ctx, c.ddb, c.table, kk, runtime.ResolveReadOpts(opts).ConsistentRead)
 	out := make([]Tenant, 0, len(raw))
 	for _, av := range raw {
 		it, uerr := unmarshalTenant(av)
@@ -300,7 +322,9 @@ func (c *AppClient) BatchGetTenants(ctx context.Context, keys []TenantKey) ([]Te
 }
 
 // BatchPutTenants writes items in chunks of 25, retrying
-// unprocessed writes with jittered backoff.
+// unprocessed writes with jittered backoff. Two items with the same key
+// return runtime.ErrDuplicateKey; on exhausted retries a
+// *runtime.UnprocessedError carries the leftover writes.
 func (c *AppClient) BatchPutTenants(ctx context.Context, items []Tenant) error {
 	avs := make([]map[string]types.AttributeValue, 0, len(items))
 	for i := range items {

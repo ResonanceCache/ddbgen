@@ -41,12 +41,16 @@ func lowerCamel(s string) string {
 // reservedIdents are identifiers generated code uses for receivers, common
 // locals, and imported package names; parameters must not shadow them.
 var reservedIdents = map[string]bool{
-	"c": true, "u": true, "q": true, "v": true, "ctx": true, "err": true,
-	"av": true, "out": true, "pk": true, "sk": true, "cond": true,
-	"names": true, "values": true, "expected": true, "input": true,
+	"c": true, "u": true, "q": true, "v": true, "k": true, "ctx": true,
+	"err": true, "uerr": true, "av": true, "out": true, "pk": true,
+	"sk": true, "cond": true, "names": true, "values": true,
+	"expected": true, "input": true, "pred": true, "ok": true, "enc": true,
+	"encLo": true, "encHi": true, "lo": true, "hi": true, "val": true,
+	"delta": true, "items": true, "keys": true, "kk": true, "raw": true,
+	"col": true, "spec": true, "do": true, "it": true, "dup": true,
 	"aws": true, "attributevalue": true, "dynamodb": true, "types": true,
 	"runtime": true, "fmt": true, "time": true, "strings": true,
-	"strconv": true, "context": true, "iter": true,
+	"strconv": true, "context": true, "iter": true, "errors": true,
 }
 
 func safeIdent(s string) string {

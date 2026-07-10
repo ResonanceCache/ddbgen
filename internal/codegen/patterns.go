@@ -136,7 +136,14 @@ func rangeFor(e *schema.Entity, cut *keytmpl.Cut) (*rangeView, error) {
 // its prefix segments, emitting encoding steps for placeholders. It
 // returns the full expression, the quoted static part before the final
 // placeholder (for predecessor assembly), and the final step variable.
-func valueExpr(e *schema.Entity, p *keytmpl.Prefix, steps *[]encStep) (full, staticPart, lastVar string, err error) {
+//
+// ensureDelim appends the delimiter regardless of whether the marker wrote
+// one. Every begins prefix that stops short of the full sk template must
+// end at a delimiter: "ORDER" would otherwise both fail to prefix-match
+// real keys ("ORDER#...") in range bounds and over-match sibling literals
+// ("ORDERX#..."). AlignPrefix validates the segment boundary; this makes
+// the rendered string honor it.
+func valueExpr(e *schema.Entity, p *keytmpl.Prefix, ensureDelim bool, steps *[]encStep) (full, staticPart, lastVar string, err error) {
 	var pieces []string
 	lit := ""
 	for i, seg := range p.Segments {
@@ -164,7 +171,7 @@ func valueExpr(e *schema.Entity, p *keytmpl.Prefix, steps *[]encStep) (full, sta
 		pieces = append(pieces, v)
 		lastVar = v
 	}
-	if p.TrailingDelim {
+	if p.TrailingDelim || ensureDelim {
 		lit += keytmpl.Delimiter
 	}
 	if lit != "" {
@@ -255,7 +262,11 @@ func buildPatternView(t *schema.Table, e *schema.Entity, ev *entityView, p *sche
 		if err != nil {
 			return nil, fmt.Errorf("%s: pattern %s: %w", p.Pos, p.Name, err)
 		}
-		full, staticPart, lastVar, err := valueExpr(e, p.SKValue, &pv.CondSteps)
+		// Only begins prefixes are prefix-matched strings that must land on
+		// a delimiter; range operands (eq/gt/gte/lt/lte) are compared as
+		// encoded values and must NOT gain one.
+		ensureDelim := p.SKCond == schema.SKBegins && cut.Consumed < len(key.SK.Segments)
+		full, staticPart, lastVar, err := valueExpr(e, p.SKValue, ensureDelim, &pv.CondSteps)
 		if err != nil {
 			return nil, err
 		}

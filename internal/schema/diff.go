@@ -2,6 +2,7 @@ package schema
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/ResonanceCache/ddbgen/internal/keytmpl"
@@ -55,8 +56,9 @@ func (r *DiffReport) additive(format string, a ...any) {
 // Diff compares a previously snapshotted schema (old) with a freshly
 // compiled one (new). Breaking: changed key template structure, removed
 // entity or pattern, changed physical attribute name, changed entity type
-// string, changed entity-type attribute. Additive: new entity, new pattern,
-// new GSI, new non-key field.
+// string, changed entity-type attribute, changed field Go type. Additive:
+// new entity, new pattern, new GSI, new non-key field. The report is
+// deterministic: changes are sorted.
 func Diff(oldS, newS *Schema) *DiffReport {
 	r := &DiffReport{}
 	oldTables := map[string]*Table{}
@@ -80,6 +82,13 @@ func Diff(oldS, newS *Schema) *DiffReport {
 			r.additive("new table %q", name)
 		}
 	}
+	sort.Slice(r.Changes, func(i, j int) bool {
+		a, b := r.Changes[i], r.Changes[j]
+		if a.Breaking != b.Breaking {
+			return a.Breaking
+		}
+		return a.Msg < b.Msg
+	})
 	return r
 }
 
@@ -188,6 +197,9 @@ func diffEntity(r *DiffReport, oe, ne *Entity) {
 		}
 		if prev.Attr != f.Attr {
 			r.breaking("entity %s: field %s attribute renamed (%q -> %q); existing items keep the old attribute", ne.Name, f.Name, prev.Attr, f.Attr)
+		}
+		if prev.GoType != f.GoType {
+			r.breaking("entity %s: field %s type changed (%s -> %s); the stored DynamoDB attribute type may no longer unmarshal", ne.Name, f.Name, prev.GoType, f.GoType)
 		}
 		delete(oldFields, f.Name)
 	}

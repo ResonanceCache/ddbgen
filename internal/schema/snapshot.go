@@ -46,5 +46,10 @@ func ReadSnapshot(path string) (*Schema, error) {
 		return nil, fmt.Errorf("snapshot %s has format_version %d; this ddbgen build supports %d",
 			path, snap.FormatVersion, snapshotFormatVersion)
 	}
+	if snap.Schema == nil {
+		// A schema-less snapshot must not silently disable the
+		// breaking-change gate.
+		return nil, fmt.Errorf("snapshot %s has no schema; delete it and regenerate", path)
+	}
 	return snap.Schema, nil
 }

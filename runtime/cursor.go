@@ -11,6 +11,11 @@ import (
 // Cursor is an opaque, URL-safe pagination token wrapping DynamoDB's
 // LastEvaluatedKey. The zero value means "from the start"; an empty cursor
 // returned from a page means "no more pages".
+//
+// Cursors are unauthenticated base64 JSON and contain the raw key values of
+// the page boundary. Treat them like the keys themselves: fine to hand back
+// to the same caller, but do not embed secrets in keys, and expect a
+// tampered cursor to surface as a query error rather than a clean rejection.
 type Cursor string
 
 // EncodeCursor packs a LastEvaluatedKey into a Cursor. ddbgen key

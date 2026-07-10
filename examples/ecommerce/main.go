@@ -144,8 +144,19 @@ func main() {
 		fmt.Printf("PaymentsByOrder(o1): %s %d cts\n", p.PaymentID, p.AmountCts)
 	}
 
-	// --- delete ---
-	must(app.DeleteOrder(ctx, "acme", t0.Add(3*time.Hour), "o3"))
+	// --- atomic transaction: order + payment together or not at all ---
+	txOrder, err := app.TransactPutOrder(&Order{
+		TenantID: "acme", OrderID: "tx1", Status: "open",
+		CreatedAt: t0.Add(48 * time.Hour), UpdatedAt: t0.Add(48 * time.Hour), Ver: 1,
+	})
+	must(err)
+	txPay, err := app.TransactPutPayment(&Payment{TenantID: "acme", OrderID: "tx1", PaymentID: "txp1", AmountCts: 100})
+	must(err)
+	must(app.TransactWrite(ctx, txOrder, txPay))
+	fmt.Println("TransactWrite: order tx1 + payment txp1 written atomically")
+
+	// --- delete (conditioned on existence) ---
+	must(app.DeleteOrder(ctx, "acme", t0.Add(3*time.Hour), "o3", runtime.WithMustExist()))
 	if _, err := app.GetOrder(ctx, "acme", t0.Add(3*time.Hour), "o3"); !errors.Is(err, runtime.ErrNotFound) {
 		fatalf("expected ErrNotFound, got %v", err)
 	}

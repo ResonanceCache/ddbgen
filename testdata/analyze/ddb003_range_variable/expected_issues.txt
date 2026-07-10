@@ -1,1 +1,1 @@
-input.go:5: DDB003: pattern DocsAfter: sk.gt ranges over placeholder {Name}, whose encoding is variable-width; lexicographic comparison would not follow value order — use a fixed-width encoder
+input.go:5: DDB002: pattern DocsAfter: condition "REV#{Name}" ends inside placeholder {Name}: {Name} is variable-width, so the condition can match part of a value; end the condition with "#" or use a fixed-width encoder

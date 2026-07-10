@@ -317,7 +317,8 @@ func encodeExpr(encoder, goType, arg string) (expr string, hasErr bool, err erro
 		return "runtime.CheckSegment(strings.ToLower(" + arg + "))", true, nil
 	case "hex":
 		if goType == "[]byte" {
-			return "runtime.EncodeHex(" + arg + ")", false, nil
+			// A nil/empty slice would encode to an empty segment.
+			return "runtime.CheckSegment(runtime.EncodeHex(" + arg + "))", true, nil
 		}
 		if _, ok := byteArray(goType); ok {
 			return "runtime.EncodeHex(" + arg + "[:])", false, nil
@@ -332,7 +333,8 @@ func encodeExpr(encoder, goType, arg string) (expr string, hasErr bool, err erro
 		if goType != "string" {
 			return fail()
 		}
-		return "runtime.EncodeURL(" + arg + ")", false, nil
+		// QueryEscape of "" is ""; the empty-segment check rejects it.
+		return "runtime.CheckSegment(runtime.EncodeURL(" + arg + "))", true, nil
 	}
 	if w := keytmpl.PadWidth(encoder); w > 0 {
 		ws := strconv.Itoa(w)

@@ -58,15 +58,34 @@ func TestGeneratedCodeBuilds(t *testing.T) {
 			for name, content := range files {
 				write(name, content)
 			}
-			cmd := exec.Command("go", "build", "./...")
+			// Cases may ship a harness (*_test.go) that runs the generated
+			// code against an in-memory DynamoDB model; those cases run go
+			// test, which subsumes the build.
+			harnesses, err := filepath.Glob(filepath.Join(dir, "*_test.go"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, h := range harnesses {
+				data, err := os.ReadFile(h)
+				if err != nil {
+					t.Fatal(err)
+				}
+				write(filepath.Base(h), data)
+			}
+			env := append(os.Environ(), "GOWORK=off", "GOFLAGS=-mod=mod")
+			verb := "build"
+			if len(harnesses) > 0 {
+				verb = "test"
+			}
+			cmd := exec.Command("go", verb, "./...")
 			cmd.Dir = tmp
-			cmd.Env = append(os.Environ(), "GOWORK=off", "GOFLAGS=-mod=mod")
+			cmd.Env = env
 			if out, err := cmd.CombinedOutput(); err != nil {
-				t.Fatalf("generated code does not build: %v\n%s", err, out)
+				t.Fatalf("generated code fails go %s: %v\n%s", verb, err, out)
 			}
 			vet := exec.Command("go", "vet", "./...")
 			vet.Dir = tmp
-			vet.Env = cmd.Env
+			vet.Env = env
 			if out, err := vet.CombinedOutput(); err != nil {
 				t.Fatalf("go vet on generated code: %v\n%s", err, out)
 			}

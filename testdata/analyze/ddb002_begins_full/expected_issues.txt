@@ -1,0 +1,1 @@
+input.go:5: DDB002: pattern Orders: sk.begins value "ORDER#{OrderID}#" covers the whole sort key "ORDER#{OrderID}" and ends with the delimiter; keys never end with a delimiter, so the condition can never match (drop the trailing "#")

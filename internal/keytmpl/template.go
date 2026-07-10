@@ -85,6 +85,9 @@ func Parse(raw string) (*Template, error) {
 // ParsePrefix parses an sk-condition value, permitting a trailing
 // delimiter that anchors the prefix at a segment boundary.
 func ParsePrefix(raw string) (*Prefix, error) {
+	if raw == "" || raw == Delimiter {
+		return nil, &ParseError{Offset: 0, Msg: "empty condition value"}
+	}
 	trailing := strings.HasSuffix(raw, Delimiter)
 	body := strings.TrimSuffix(raw, Delimiter)
 	segs, err := parseSegments(body, true)

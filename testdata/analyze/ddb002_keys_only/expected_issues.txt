@@ -1,0 +1,1 @@
+input.go:6: DDB002: pattern ByKind: GSI GSI1 projects keys_only, so queried items carry no data attributes (and no entity-type attribute to filter on); typed pattern queries require projection=all

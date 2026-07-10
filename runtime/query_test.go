@@ -51,9 +51,14 @@ func TestSKConditions(t *testing.T) {
 	if before.Kind != "between" || before.Lo != "ORDER#" || before.Hi != "ORDER#0001"+MaxKeySuffix {
 		t.Fatalf("SKBefore: %+v", before)
 	}
-	empty := SKBefore("ORDER#", "ORDER#0000", "", false)
-	if empty.Kind != "between" || empty.Lo != "ORDER#" || empty.Hi != "ORDER#" {
-		t.Fatalf("SKBefore underflow: %+v", empty)
+	if c := SKBefore("ORDER#", "ORDER#0000", "", false); c.Kind != "empty" {
+		t.Fatalf("SKBefore underflow: %+v", c)
+	}
+	if c := SKOnOrAfter("ORDER#", "ORDER#0002"); c.Kind != "between" || c.Lo != "ORDER#0002" || c.Hi != "ORDER#"+MaxKeySuffix {
+		t.Fatalf("SKOnOrAfter: %+v", c)
+	}
+	if c := SKOnOrBefore("ORDER#", "ORDER#0002"); c.Kind != "between" || c.Lo != "ORDER#" || c.Hi != "ORDER#0002"+MaxKeySuffix {
+		t.Fatalf("SKOnOrBefore: %+v", c)
 	}
 	// Exclusive partitions (scope empty) use one-sided conditions.
 	if c := SKAfter("", "0002"); c.Kind != "gt" || c.Lo != "0002"+MaxKeySuffix {
@@ -62,12 +67,30 @@ func TestSKConditions(t *testing.T) {
 	if c := SKBefore("", "0002", "0001", true); c.Kind != "lt" || c.Lo != "0002" {
 		t.Fatalf("SKBefore no scope: %+v", c)
 	}
+	if c := SKOnOrAfter("", "0002"); c.Kind != "gte" || c.Lo != "0002" {
+		t.Fatalf("SKOnOrAfter no scope: %+v", c)
+	}
+	if c := SKOnOrBefore("", "0002"); c.Kind != "lte" || c.Lo != "0002"+MaxKeySuffix {
+		t.Fatalf("SKOnOrBefore no scope: %+v", c)
+	}
+	if c := SKEq("ORDER#x"); c.Kind != "eq" || c.Lo != "ORDER#x" {
+		t.Fatalf("SKEq: %+v", c)
+	}
+	if c := SKBegins("ORDER#"); c.Kind != "begins" || c.Lo != "ORDER#" {
+		t.Fatalf("SKBegins: %+v", c)
+	}
 	if c := SKBetween("A#1", "A#2"); c.Kind != "between" || c.Hi != "A#2"+MaxKeySuffix {
 		t.Fatalf("SKBetween: %+v", c)
 	}
-	// Degenerate: value shorter than scope yields a provably empty range.
-	if c := SKAfter("ORDER#", "OR"); c.Lo != "ORDER#" || c.Hi != "ORDER#" {
+	// Degenerate inputs are provably empty, never invalid BETWEENs.
+	if c := SKBetween("A#2", "A#1"); c.Kind != "empty" {
+		t.Fatalf("SKBetween reversed: %+v", c)
+	}
+	if c := SKAfter("ORDER#", "OR"); c.Kind != "empty" {
 		t.Fatalf("SKAfter degenerate: %+v", c)
+	}
+	if c := SKOnOrAfter("ORDER#", "ORDER#"+MaxKeySuffix+"x"); c.Kind != "empty" {
+		t.Fatalf("SKOnOrAfter above scope: %+v", c)
 	}
 }
 
