@@ -35,6 +35,10 @@ func (f *fakeDB) Query(_ context.Context, _ *dynamodb.QueryInput, _ ...func(*dyn
 	return r.out, r.err
 }
 
+func (f *fakeDB) Scan(context.Context, *dynamodb.ScanInput, ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error) {
+	return nil, errFakeUnexpected
+}
+
 func (f *fakeDB) BatchGetItem(_ context.Context, in *dynamodb.BatchGetItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.BatchGetItemOutput, error) {
 	f.batchGetIn = append(f.batchGetIn, in)
 	if f.batchGetFn == nil {

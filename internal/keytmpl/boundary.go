@@ -51,9 +51,18 @@ func AlignPrefix(t *Template, p *Prefix, types FieldTypes) (*Cut, error) {
 				return nil, fmt.Errorf("condition %q placeholder %s does not match sk template %q placeholder %s",
 					p.Raw, ps, t.Raw, ts)
 			}
-			if last && !p.TrailingDelim {
+			// A variable-width placeholder ended without a trailing delimiter
+			// is a hazard only when it is NOT the template's final segment:
+			// then the real key has more segments after it, so the condition
+			// would match a partial value of a longer key. When the
+			// placeholder is the template's final segment the key genuinely
+			// ends there, so an exact (sk.eq) or prefix (sk.begins) match on
+			// that whole attribute is correct — e.g. a GSI sort key that is a
+			// single {Category} placeholder.
+			finalSegment := i == len(t.Segments)-1
+			if last && !p.TrailingDelim && !finalSegment {
 				if _, fixed := placeholderWidth(ps, types); !fixed {
-					return nil, fmt.Errorf("condition %q ends inside placeholder %s: %s is variable-width, so the condition can match part of a value; end the condition with %q or use a fixed-width encoder",
+					return nil, fmt.Errorf("condition %q ends inside placeholder %s: %s is variable-width and is not the final key segment, so the condition can match part of a value; end the condition with %q or use a fixed-width encoder",
 						p.Raw, ps, ps, Delimiter)
 				}
 			}

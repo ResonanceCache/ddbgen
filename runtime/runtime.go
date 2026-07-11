@@ -11,16 +11,25 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 )
 
-// DynamoDB is the subset of the DynamoDB client used by generated code and
-// the runtime helpers. *dynamodb.Client implements it; substitute a mock or
-// a wrapping implementation to test code that uses a generated client, per
-// the AWS SDK for Go v2 testing guidance.
+// DynamoDB is the subset of the DynamoDB client used by generated code, the
+// runtime helpers, and the generated client's DynamoDB() escape hatch.
+// *dynamodb.Client implements it; substitute a mock or a wrapping
+// implementation to test code that uses a generated client, per the AWS SDK
+// for Go v2 testing guidance.
+//
+// Query through TransactWriteItems are what generated code calls. Scan is
+// not — no generated method scans — but it is included so the DynamoDB()
+// escape hatch can reach the one table-wide read that key-based access
+// cannot express (admin counts, migrations, full-table audits). The
+// interface stays small and mockable; it is deliberately not a kitchen-sink
+// DynamoDBAPI.
 type DynamoDB interface {
 	GetItem(ctx context.Context, in *dynamodb.GetItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error)
 	PutItem(ctx context.Context, in *dynamodb.PutItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error)
 	DeleteItem(ctx context.Context, in *dynamodb.DeleteItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error)
 	UpdateItem(ctx context.Context, in *dynamodb.UpdateItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error)
 	Query(ctx context.Context, in *dynamodb.QueryInput, optFns ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error)
+	Scan(ctx context.Context, in *dynamodb.ScanInput, optFns ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error)
 	BatchGetItem(ctx context.Context, in *dynamodb.BatchGetItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.BatchGetItemOutput, error)
 	BatchWriteItem(ctx context.Context, in *dynamodb.BatchWriteItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.BatchWriteItemOutput, error)
 	TransactWriteItems(ctx context.Context, in *dynamodb.TransactWriteItemsInput, optFns ...func(*dynamodb.Options)) (*dynamodb.TransactWriteItemsOutput, error)

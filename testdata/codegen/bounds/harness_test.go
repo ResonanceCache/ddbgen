@@ -109,6 +109,10 @@ func (m *modelDB) Query(_ context.Context, in *dynamodb.QueryInput, _ ...func(*d
 	return &dynamodb.QueryOutput{Items: out}, nil
 }
 
+func (m *modelDB) Scan(context.Context, *dynamodb.ScanInput, ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error) {
+	return nil, errUnsupported
+}
+
 func (m *modelDB) GetItem(context.Context, *dynamodb.GetItemInput, ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error) {
 	return nil, errUnsupported
 }

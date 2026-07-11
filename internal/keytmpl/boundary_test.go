@@ -71,8 +71,9 @@ func TestAlignPrefix(t *testing.T) {
 
 func TestAlignPrefixVariableWidthEnd(t *testing.T) {
 	sk := mustParse(t, "PAY#{OrderID}#{PayID}")
-	// Ending inside a variable-width placeholder without a delimiter anchor
-	// must be rejected; with the trailing delimiter it is precise.
+	// Ending inside a NON-final variable-width placeholder without a
+	// delimiter anchor must be rejected; with the trailing delimiter it is
+	// precise.
 	if _, err := AlignPrefix(sk, mustPrefix(t, "PAY#{OrderID}"), orderTypes); err == nil {
 		t.Fatal("expected variable-width mid-value rejection")
 	}
@@ -85,6 +86,32 @@ func TestAlignPrefixVariableWidthEnd(t *testing.T) {
 	}
 	if cut.RangeEligible(orderTypes) {
 		t.Fatal("PayID is a raw string; range methods must not be eligible")
+	}
+}
+
+// TestAlignPrefixFinalVariableWidth covers a whole-key variable-width sort
+// key (a GSI keyed on a single {Category} attribute): an exact or prefix
+// match on the complete attribute is legal, since the key ends there.
+func TestAlignPrefixFinalVariableWidth(t *testing.T) {
+	catTypes := func(field string) (string, bool) {
+		if field == "Category" {
+			return "string", true
+		}
+		return "", false
+	}
+	sk := mustParse(t, "{Category}")
+	cut, err := AlignPrefix(sk, mustPrefix(t, "{Category}"), catTypes)
+	if err != nil {
+		t.Fatalf("whole-key variable-width match must be accepted: %v", err)
+	}
+	if cut.Consumed != 1 || cut.Next != nil {
+		t.Fatalf("unexpected cut: %+v", cut)
+	}
+
+	// The same holds when the final placeholder follows a literal prefix.
+	sk2 := mustParse(t, "C#{Category}")
+	if _, err := AlignPrefix(sk2, mustPrefix(t, "C#{Category}"), catTypes); err != nil {
+		t.Fatalf("final variable-width after a literal must be accepted: %v", err)
 	}
 }
 

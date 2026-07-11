@@ -34,12 +34,17 @@ written:
   index;
 - sort-key conditions must align to a placeholder boundary of that index's
   sk template — `sk.begins="ORD"` is rejected because it cuts mid-literal,
-  and a begins value ending inside a variable-width placeholder is rejected
-  because it could match part of a value. (A begins value that stops at a
-  segment boundary without writing the trailing `#` — `sk.begins="ORDER"` —
-  is accepted and canonicalized: the generated prefix always carries the
-  delimiter, so range cuts and sibling literals like `ORDERX` behave
-  correctly.);
+  and a condition ending inside a *non-final* variable-width placeholder is
+  rejected because it could match part of a value of the longer key (e.g.
+  `sk.begins="PAY#{OrderID}"` over `PAY#{OrderID}#{PayID}`). A condition
+  that ends at the template's *final* placeholder is fine even when that
+  placeholder is variable-width — the key genuinely ends there, so an exact
+  (`sk.eq`) or prefix (`sk.begins`) match on the whole attribute is correct
+  (e.g. a GSI sort key that is a single `{Category}`). (A begins value that
+  stops at a segment boundary without writing the trailing `#` —
+  `sk.begins="ORDER"` — is accepted and canonicalized: the generated prefix
+  always carries the delimiter, so range cuts and sibling literals like
+  `ORDERX` behave correctly.);
 - `sk.eq` must spell out the complete sort key (shorter keys are never
   written; use `sk.begins` for prefixes), and a `sk.begins` value that
   covers the whole sort key must not end with the delimiter (keys never

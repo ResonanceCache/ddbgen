@@ -127,6 +127,38 @@ rationale per judgment call, per the handoff spec.
   documented in the generated godoc); the CDK emitter was cut for time and
   because CFN/TF cover the deployment story.
 
+- **v0.1.1, dogfooding a real migration (noahub, a parked FL-permit aggregator
+  with a hand-written 5-entity single-table repository):**
+  - **AlignPrefix false positive fixed.** `sk.eq="{Category}"` on a GSI whose
+    sort key is a single variable-width `{Category}` placeholder was rejected
+    ("ends inside a variable-width placeholder"). But an exact/prefix match on a
+    placeholder that is the template's *final* segment is correct — the key
+    genuinely ends there. The audit had removed the original `i != len-1` guard,
+    over-correcting; restored it. For a `sk.gt` over such a placeholder the
+    check now surfaces the more accurate DDB003 (lexicographic order won't
+    follow value order) instead of the begins-oriented DDB002.
+  - **Scan added to the runtime.DynamoDB interface.** The `client.DynamoDB()`
+    escape hatch returned the mockability interface, which listed only the 8
+    ops generated code calls — omitting Scan, the single most common operation
+    an escape hatch exists to reach (admin counts, migrations, full-table
+    audits). noahub needed Scan in 4 places; without it the escape hatch was
+    unusable. Added Scan (9 ops, still a tight mockable interface, explicitly
+    not a kitchen-sink DynamoDBAPI).
+  - **Confirmed working with no ddbgen change:** the delimiter guard caught a
+    genuine `RUN#`-in-value bug in the migration test; the entity-type filter
+    made shared-partition GSI + scan queries exact; batch dedup/chunking,
+    cursor pagination through server-side filters, TTL, and multi-placeholder
+    variable-width sort keys (`{CapturedAt}#{Category}`) all worked as
+    generated. The migration also surfaced a latent bug in noahub's *own*
+    hand-written code (a "bidirectional" cross-ref index that normalized both
+    writes to one key), fixed in the migration wrapper, not ddbgen.
+  - **Validated limitation (not fixed):** ddbgen cannot adopt noahub's existing
+    physical conventions — uppercase `PK`/`SK`, GSI keyed on raw data
+    attributes (`Source`/`Category`) rather than synthesized ones. ddbgen
+    hardcodes lowercase `pk`/`sk` and synthesizes `<gsi>pk`/`<gsi>sk`. Fine for
+    a greenfield/regenerated table (noahub is parked, no live data); confirms
+    configurable key attribute names belong on the roadmap.
+
 ## Known gaps
 
 - Pattern queries against `projection=keys_only` GSIs unmarshal only key and
