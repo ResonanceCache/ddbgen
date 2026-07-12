@@ -11,6 +11,12 @@ single-table DynamoDB design — key templates, GSIs, access patterns — and
 generates a fully typed client, the table's infrastructure definition, and an
 access-pattern document, all from the same parse.
 
+> **Writeup:** [Type-safe single-table DynamoDB in Go — and the two silent-wrong-data
+> bugs I almost shipped](docs/blog/typed-single-table-dynamodb.md) covers the
+> lexicographic-ordering invariant, the exclusive-range-bound construction, and
+> what an adversarial audit plus a real migration each caught that the other
+> missed.
+
 ```go
 //ddb:entity table=app type=order version=Ver ttl=ExpiresAt
 //ddb:key pk="TENANT#{TenantID}" sk="ORDER#{CreatedAt:rfc3339}#{OrderID}"
